@@ -10,8 +10,6 @@ public static class SeedData
 {
     public static async Task InitializeAsync(AppDbContext context, IPasswordHasher<User> passwordHasher)
     {
-        await context.Database.MigrateAsync();
-
         // Ensure baseline users exist (idempotent)
         var userSeeds = new[]
         {

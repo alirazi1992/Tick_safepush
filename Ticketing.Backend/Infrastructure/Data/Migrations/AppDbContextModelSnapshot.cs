@@ -162,6 +162,92 @@ namespace Ticketing.Backend.Infrastructure.Data.Migrations
                     b.ToTable("Subcategories");
                 });
 
+            modelBuilder.Entity("Ticketing.Backend.Domain.Entities.SystemSettings", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("AllowClientAttachments")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("AllowedEmailDomains")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("AutoAssignEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("AppName")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DefaultLanguage")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("DefaultPriority")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("DefaultStatus")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("DefaultTheme")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("EmailNotificationsEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("NotifyOnTicketAssigned")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("NotifyOnTicketClosed")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("NotifyOnTicketCreated")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("NotifyOnTicketReplied")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("PasswordMinLength")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("SupportEmail")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SupportPhone")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("ResponseSlaHours")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("Require2FA")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("SessionTimeoutMinutes")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("SmsNotificationsEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Timezone")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("SystemSettings");
+                });
+
             modelBuilder.Entity("Ticketing.Backend.Domain.Entities.Technician", b =>
                 {
                     b.Property<Guid>("Id")
