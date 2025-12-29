@@ -117,6 +117,16 @@ public class TicketService : ITicketService
             return null;
         }
 
+        // Auto-set Viewed when technician/admin opens ticket detail (if status is Submitted and viewer is not the creator)
+        if (ticket.Status == TicketStatus.Submitted && 
+            ticket.CreatedByUserId != userId && 
+            (role == UserRole.Technician || role == UserRole.Admin))
+        {
+            ticket.Status = TicketStatus.Viewed;
+            ticket.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+        }
+
         return MapToResponse(ticket);
     }
 
@@ -131,7 +141,7 @@ public class TicketService : ITicketService
             CategoryId = request.CategoryId,
             SubcategoryId = request.SubcategoryId,
             Priority = request.Priority,
-            Status = TicketStatus.New,
+            Status = TicketStatus.Submitted,
             CreatedByUserId = userId,
             CreatedAt = DateTime.UtcNow
         };
@@ -140,7 +150,7 @@ public class TicketService : ITicketService
         await _context.SaveChangesAsync();
 
         // NOTE: Auto-assignment on ticket creation is DISABLED by design.
-        // Tickets are always created as New + unassigned.
+        // Tickets are always created as Submitted + unassigned.
         // Smart Assignment runs manually via POST /api/admin/assignment/smart/run
         // or can be scheduled externally. This ensures predictable ticket state.
 
@@ -185,22 +195,28 @@ public class TicketService : ITicketService
 
         if (request.Status.HasValue)
         {
+            var newStatus = request.Status.Value;
+            
+            // Validation: Only Admin can set Closed
+            if (newStatus == TicketStatus.Closed && role != UserRole.Admin)
+            {
+                return null; // Forbid - return null to indicate permission denied
+            }
+            
+            // Client restrictions: Cannot set InProgress, Resolved, or Closed
             if (role == UserRole.Client)
             {
-                // Clients can only close or set waiting for client on their own tickets
-                if (request.Status is TicketStatus.WaitingForClient or TicketStatus.Closed)
+                if (newStatus == TicketStatus.InProgress || 
+                    newStatus == TicketStatus.Resolved || 
+                    newStatus == TicketStatus.Closed)
                 {
-                    ticket.Status = request.Status.Value;
+                    return null; // Forbid
                 }
             }
-            else if (role == UserRole.Technician)
-            {
-                ticket.Status = request.Status.Value;
-            }
-            else
-            {
-                ticket.Status = request.Status.Value;
-            }
+            
+            // Technician can set Open, InProgress, Resolved (but not Closed - only Admin)
+            // Admin can set any status including Closed
+            ticket.Status = newStatus;
         }
 
         if (role == UserRole.Admin)
@@ -238,7 +254,8 @@ public class TicketService : ITicketService
         // Set both TechnicianId (for display/navigation) and AssignedToUserId (for filtering/queries)
         ticket.TechnicianId = technicianId;
         ticket.AssignedToUserId = technician.UserId; // CRITICAL: Set to Technician.UserId (User.Id), not null
-        ticket.Status = TicketStatus.InProgress;
+        // When assigning, set status to Open (not InProgress) - technician will change to InProgress when they start working
+        ticket.Status = TicketStatus.Open;
         ticket.UpdatedAt = DateTime.UtcNow;
         await _context.SaveChangesAsync();
 
@@ -299,38 +316,45 @@ public class TicketService : ITicketService
         // ═══════════════════════════════════════════════════════════════════════════════
         // STATUS CHANGE PERMISSION RULES (SECURITY-CRITICAL)
         // ═══════════════════════════════════════════════════════════════════════════════
-        // CLOSE (Resolved/Closed): Technician & Admin ONLY - Client FORBIDDEN
-        // REOPEN (InProgress from Resolved/Closed): All roles allowed
-        // Other status changes: Technician & Admin only
+        // CLOSE (Closed): Admin ONLY
+        // Resolved: Technician & Admin ONLY - Client FORBIDDEN
+        // InProgress: Technician & Admin ONLY - Client FORBIDDEN
+        // Other status changes: Allowed based on role
         // ═══════════════════════════════════════════════════════════════════════════════
         if (status.HasValue)
         {
             var newStatus = status.Value;
-            var isClosingStatus = newStatus == TicketStatus.Resolved || newStatus == TicketStatus.Closed;
-            var isReopening = newStatus == TicketStatus.InProgress && 
-                              (ticket.Status == TicketStatus.Resolved || ticket.Status == TicketStatus.Closed);
-
+            
+            // Only Admin can set Closed
+            if (newStatus == TicketStatus.Closed && author.Role != UserRole.Admin)
+            {
+                throw new StatusChangeForbiddenException("Only Admins can close tickets.");
+            }
+            
             if (author.Role == UserRole.Client)
             {
-                // Client can REOPEN (set InProgress on resolved/closed ticket)
-                // Client can set WaitingForClient (waiting for themselves - edge case but allowed)
-                // Client CANNOT close tickets (Resolved or Closed)
-                if (isClosingStatus)
+                // Client cannot set InProgress, Resolved, or Closed
+                if (newStatus == TicketStatus.InProgress || 
+                    newStatus == TicketStatus.Resolved || 
+                    newStatus == TicketStatus.Closed)
                 {
-                    // FORBIDDEN: Client cannot close tickets - throw exception for controller to handle
-                    throw new StatusChangeForbiddenException("Clients cannot close tickets. Only Technicians and Admins can set status to Resolved or Closed.");
+                    throw new StatusChangeForbiddenException("Clients cannot set status to InProgress, Resolved, or Closed.");
                 }
-
-                // Client can only set: InProgress (reopen), WaitingForClient
-                if (isReopening || newStatus == TicketStatus.WaitingForClient)
+                // Client can set Submitted, Viewed, Open
+                ticket.Status = newStatus;
+            }
+            else if (author.Role == UserRole.Technician)
+            {
+                // Technician can set Open, InProgress, Resolved (but not Closed)
+                if (newStatus == TicketStatus.Closed)
                 {
-                    ticket.Status = newStatus;
+                    throw new StatusChangeForbiddenException("Only Admins can close tickets.");
                 }
-                // Other status changes by Client are silently ignored (no error, just don't apply)
+                ticket.Status = newStatus;
             }
             else
             {
-                // Technician & Admin can set any status
+                // Admin can set any status
                 ticket.Status = newStatus;
             }
         }
@@ -372,7 +396,7 @@ public class TicketService : ITicketService
 
     // ═══════════════════════════════════════════════════════════════════════════════
     // MANUAL TEST CHECKLIST (Swagger):
-    // 1. POST /api/Tickets → status=New, assignedToUserId=null, assignedToName/email/phone=null
+    // 1. POST /api/Tickets → status=Submitted, assignedToUserId=null, assignedToName/email/phone=null
     // 2. POST /api/admin/assignment/smart/run → assignedCount > 0 (if eligible unassigned tickets exist)
     // 3. GET /api/technician/tickets (as assigned tech) → ticket appears in list
     // ═══════════════════════════════════════════════════════════════════════════════
@@ -436,3 +460,4 @@ public class TicketService : ITicketService
         });
     }
 }
+

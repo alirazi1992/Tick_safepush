@@ -129,16 +129,29 @@ public class TicketsController : ControllerBase
         catch (TicketValidationException ex)
         {
             // Category/Subcategory validation errors - return 400 with clear error message and code
+            // Parse CategoryId and SubcategoryId from Field and Value if they exist
+            int? categoryId = null;
+            int? subcategoryId = null;
+            
+            if (int.TryParse(ex.Field, out var catId))
+            {
+                categoryId = catId;
+            }
+            if (int.TryParse(ex.Value, out var subId))
+            {
+                subcategoryId = subId;
+            }
+            
             _logger.LogWarning(
-                "Ticket creation failed - validation error: {Message} (ErrorCode={ErrorCode}, UserId={UserId}, CategoryId={CategoryId}, SubcategoryId={SubcategoryId})",
-                ex.Message, ex.ErrorCode, context.Value.userId, ex.CategoryId, ex.SubcategoryId);
+                "Ticket creation failed - validation error: {Message} (Code={Code}, UserId={UserId}, CategoryId={CategoryId}, SubcategoryId={SubcategoryId})",
+                ex.Message, ex.Code, context.Value.userId, categoryId, subcategoryId);
 
             return BadRequest(new
             {
                 message = ex.Message,
-                error = ex.ErrorCode,
-                categoryId = ex.CategoryId,
-                subcategoryId = ex.SubcategoryId
+                error = ex.Code,
+                categoryId = categoryId,
+                subcategoryId = subcategoryId
             });
         }
         catch (InvalidOperationException ex)

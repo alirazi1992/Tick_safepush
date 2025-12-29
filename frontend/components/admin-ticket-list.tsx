@@ -34,25 +34,24 @@ import {
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 
-const statusColors: Record<string, string> = {
-  open: "bg-red-100 text-red-800 border-red-200",
-  "in-progress": "bg-yellow-100 text-yellow-800 border-yellow-200",
-  resolved: "bg-green-100 text-green-800 border-green-200",
-  closed: "bg-gray-100 text-gray-800 border-gray-200",
+const statusColors: Record<TicketStatus, string> = {
+  Submitted: "bg-blue-100 text-blue-800 border-blue-200",
+  Viewed: "bg-purple-100 text-purple-800 border-purple-200",
+  Open: "bg-red-100 text-red-800 border-red-200",
+  InProgress: "bg-yellow-100 text-yellow-800 border-yellow-200",
+  Resolved: "bg-green-100 text-green-800 border-green-200",
+  Closed: "bg-gray-100 text-gray-800 border-gray-200",
 }
 
-const statusLabels: Record<string, string> = {
-  open: "باز",
-  "in-progress": "در حال انجام",
-  resolved: "حل شده",
-  closed: "بسته",
-}
+const statusLabels: Record<TicketStatus, string> = TICKET_STATUS_LABELS
 
-const statusIcons: Record<string, LucideIcon> = {
-  open: AlertCircle,
-  "in-progress": Clock,
-  resolved: CheckCircle,
-  closed: XCircle,
+const statusIcons: Record<TicketStatus, LucideIcon> = {
+  Submitted: AlertCircle,
+  Viewed: Eye,
+  Open: AlertCircle,
+  InProgress: Clock,
+  Resolved: CheckCircle,
+  Closed: XCircle,
 }
 
 const priorityColors: Record<string, string> = {
@@ -186,15 +185,15 @@ export function AdminTicketList({ tickets, onTicketUpdate }: AdminTicketListProp
           </div>
           <div class="stat-box">
             <h3>باز</h3>
-            <p>${tickets.filter((t) => t.status === "open").length}</p>
+            <p>${tickets.filter((t) => t.status === "Open").length}</p>
           </div>
           <div class="stat-box">
             <h3>در حال انجام</h3>
-            <p>${tickets.filter((t) => t.status === "in-progress").length}</p>
+            <p>${tickets.filter((t) => t.status === "InProgress").length}</p>
           </div>
           <div class="stat-box">
             <h3>حل شده</h3>
-            <p>${tickets.filter((t) => t.status === "resolved").length}</p>
+            <p>${tickets.filter((t) => t.status === "Resolved" || t.status === "Closed").length}</p>
           </div>
         </div>
 
@@ -393,7 +392,7 @@ export function AdminTicketList({ tickets, onTicketUpdate }: AdminTicketListProp
               <div className="flex gap-2">
                 <Button
                   size="sm"
-                  onClick={() => handleBulkStatusUpdate("in-progress")}
+                  onClick={() => handleBulkStatusUpdate("InProgress")}
                   variant="outline"
                   className="font-iran"
                 >
@@ -401,7 +400,7 @@ export function AdminTicketList({ tickets, onTicketUpdate }: AdminTicketListProp
                 </Button>
                 <Button
                   size="sm"
-                  onClick={() => handleBulkStatusUpdate("resolved")}
+                  onClick={() => handleBulkStatusUpdate("Resolved")}
                   variant="outline"
                   className="font-iran"
                 >
@@ -409,7 +408,7 @@ export function AdminTicketList({ tickets, onTicketUpdate }: AdminTicketListProp
                 </Button>
                 <Button
                   size="sm"
-                  onClick={() => handleBulkStatusUpdate("closed")}
+                  onClick={() => handleBulkStatusUpdate("Closed")}
                   variant="outline"
                   className="font-iran"
                 >

@@ -1,4 +1,4 @@
-export type TicketStatus = "open" | "in-progress" | "resolved" | "closed"
+export type TicketStatus = "Submitted" | "Viewed" | "Open" | "InProgress" | "Resolved" | "Closed"
 export type TicketPriority = "low" | "medium" | "high" | "urgent"
 export type TicketCategory = string
 

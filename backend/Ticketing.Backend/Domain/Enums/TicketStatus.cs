@@ -2,9 +2,10 @@ namespace Ticketing.Backend.Domain.Enums;
 
 public enum TicketStatus
 {
-    New = 0,
-    InProgress = 1,
-    WaitingForClient = 2,
-    Resolved = 3,
-    Closed = 4
+    Submitted = 0,
+    Viewed = 1,
+    Open = 2,
+    InProgress = 3,
+    Resolved = 4,
+    Closed = 5
 }

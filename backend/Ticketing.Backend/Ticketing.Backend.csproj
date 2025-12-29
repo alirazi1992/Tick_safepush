@@ -28,4 +28,12 @@
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="8.0.4" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Exclude old src/ directory structure from compilation -->
+    <Compile Remove="src/**" />
+    <Content Remove="src/**" />
+    <EmbeddedResource Remove="src/**" />
+    <None Remove="src/**" />
+  </ItemGroup>
+
 </Project>

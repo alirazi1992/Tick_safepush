@@ -44,12 +44,13 @@ import {
   CheckCircle,
 } from "lucide-react";
 import type { Ticket, TicketCategory, TicketPriority, TicketStatus } from "@/types";
+import { TICKET_STATUS_LABELS } from "@/lib/ticket-status";
 
 /* ====================== TYPES ====================== */
 type FilterStatus = "all" | TicketStatus;
 type FilterPriority = "all" | TicketPriority;
 
-type SummaryScope = "all" | "open" | "in-progress" | "resolved";
+type SummaryScope = "all" | "Open" | "InProgress" | "Resolved";
 
 interface User {
   name?: string;
@@ -67,18 +68,15 @@ interface TechnicianDashboardProps {
 
 /* =================== LABELS / COLORS =================== */
 const statusColors: Record<TicketStatus, string> = {
-  open: "bg-red-100 text-red-800 border-red-200",
-  "in-progress": "bg-yellow-100 text-yellow-800 border-yellow-200",
-  resolved: "bg-green-100 text-green-800 border-green-200",
-  closed: "bg-gray-100 text-gray-800 border-gray-200",
+  Submitted: "bg-blue-100 text-blue-800 border-blue-200",
+  Viewed: "bg-cyan-100 text-cyan-800 border-cyan-200",
+  Open: "bg-red-100 text-red-800 border-red-200",
+  InProgress: "bg-yellow-100 text-yellow-800 border-yellow-200",
+  Resolved: "bg-green-100 text-green-800 border-green-200",
+  Closed: "bg-gray-100 text-gray-800 border-gray-200",
 };
 
-const statusLabels: Record<TicketStatus, string> = {
-  open: "باز",
-  "in-progress": "در حال انجام",
-  resolved: "حل شده",
-  closed: "بسته",
-};
+const statusLabels = TICKET_STATUS_LABELS;
 
 const priorityColors: Record<TicketPriority, string> = {
   low: "bg-blue-100 text-blue-800 border-blue-200",
@@ -126,7 +124,7 @@ export function TechnicianDashboard({
   const [viewDialogOpen, setViewDialogOpen] = useState(false);
   const [responseDialogOpen, setResponseDialogOpen] = useState(false);
   const [responseMessage, setResponseMessage] = useState("");
-  const [responseStatus, setResponseStatus] = useState<TicketStatus>("open");
+  const [responseStatus, setResponseStatus] = useState<TicketStatus>("Open");
   const [summaryDialogOpen, setSummaryDialogOpen] = useState(false);
   const [summaryDialogData, setSummaryDialogData] = useState<{
     title: string;
@@ -139,23 +137,23 @@ export function TechnicianDashboard({
   useEffect(() => {
     if (activeSection === "in-progress") {
       cardOverrideRef.current = null;
-      setSelectedScope('in-progress');
+      setSelectedScope('InProgress');
       setFilterStatus('all');
       setFilterPriority('all');
       return;
     }
     if (activeSection === "history") {
       cardOverrideRef.current = null;
-      setSelectedScope('resolved');
+      setSelectedScope('Resolved');
       setFilterStatus('all');
       setFilterPriority('all');
       return;
     }
     // assigned view
     setFilterPriority('all');
-    if (cardOverrideRef.current === 'open') {
-      setSelectedScope('open');
-      setFilterStatus('open');
+    if (cardOverrideRef.current === 'Open') {
+      setSelectedScope('Open');
+      setFilterStatus('Open');
       cardOverrideRef.current = null;
     } else {
       setSelectedScope('all');
@@ -175,12 +173,12 @@ export function TechnicianDashboard({
 
   const matchesScope = (ticket: Ticket, scope: SummaryScope) => {
     switch (scope) {
-      case "open":
-        return ticket.status === "open";
-      case "in-progress":
-        return ticket.status === "in-progress";
-      case "resolved":
-        return ticket.status === "resolved" || ticket.status === "closed";
+      case "Open":
+        return ticket.status === "Open";
+      case "InProgress":
+        return ticket.status === "InProgress";
+      case "Resolved":
+        return ticket.status === "Resolved" || ticket.status === "Closed";
       case "all":
       default:
         return true;
@@ -208,9 +206,9 @@ export function TechnicianDashboard({
   });
 
   const totalTickets = technicianTickets.length;
-  const openTickets = technicianTickets.filter((t) => t.status === "open").length;
-  const inProgressTickets = technicianTickets.filter((t) => t.status === "in-progress").length;
-  const resolvedTickets = technicianTickets.filter((t) => t.status === "resolved" || t.status === "closed").length;
+  const openTickets = technicianTickets.filter((t) => t.status === "Open").length;
+  const inProgressTickets = technicianTickets.filter((t) => t.status === "InProgress").length;
+  const resolvedTickets = technicianTickets.filter((t) => t.status === "Resolved" || t.status === "Closed").length;
 
   const summaryCards = [
     {
@@ -224,32 +222,32 @@ export function TechnicianDashboard({
       iconColor: "text-muted-foreground",
     },
     {
-      id: "open",
+      id: "Open",
       title: "نیاز به پاسخ",
       description: "تیکت‌های منتظر پاسخ شما",
       value: openTickets,
       icon: AlertCircle,
-      scope: "open" as SummaryScope,
+      scope: "Open" as SummaryScope,
       section: "assigned" as const,
       iconColor: "text-red-500",
     },
     {
-      id: "in-progress",
+      id: "InProgress",
       title: "در حال انجام",
       description: "تیکت‌هایی که در حال پیگیری هستند",
       value: inProgressTickets,
       icon: Clock,
-      scope: "in-progress" as SummaryScope,
+      scope: "InProgress" as SummaryScope,
       section: "in-progress" as const,
       iconColor: "text-blue-500",
     },
     {
-      id: "resolved",
+      id: "Resolved",
       title: "حل شده",
       description: "تیکت‌هایی که بسته شده‌اند",
       value: resolvedTickets,
       icon: CheckCircle,
-      scope: "resolved" as SummaryScope,
+      scope: "Resolved" as SummaryScope,
       section: "history" as const,
       iconColor: "text-green-500",
     },
@@ -257,19 +255,19 @@ export function TechnicianDashboard({
 
   const scopeToSection: Record<SummaryScope, "assigned" | "in-progress" | "history"> = {
     all: "assigned",
-    open: "assigned",
-    "in-progress": "in-progress",
-    resolved: "history",
+    Open: "assigned",
+    InProgress: "in-progress",
+    Resolved: "history",
   };
 
   const handleSummaryClick = (card: (typeof summaryCards)[number]) => {
     const scope = card.scope;
     const targetSection = scopeToSection[scope];
 
-    if (scope === "open") {
-      cardOverrideRef.current = "open";
-      setSelectedScope("open");
-      setFilterStatus("open");
+    if (scope === "Open") {
+      cardOverrideRef.current = "Open";
+      setSelectedScope("Open");
+      setFilterStatus("Open");
       setFilterPriority("all");
       if (onSectionChange && activeSection !== targetSection) {
         onSectionChange(targetSection);
@@ -495,10 +493,12 @@ export function TechnicianDashboard({
               </SelectTrigger>
               <SelectContent className="font-iran">
                 <SelectItem value="all">همه وضعیت‌ها</SelectItem>
-                <SelectItem value="open">باز</SelectItem>
-                <SelectItem value="in-progress">در حال انجام</SelectItem>
-                <SelectItem value="resolved">حل شده</SelectItem>
-                <SelectItem value="closed">بسته</SelectItem>
+                <SelectItem value="Submitted">{TICKET_STATUS_LABELS.Submitted}</SelectItem>
+                <SelectItem value="Viewed">{TICKET_STATUS_LABELS.Viewed}</SelectItem>
+                <SelectItem value="Open">{TICKET_STATUS_LABELS.Open}</SelectItem>
+                <SelectItem value="InProgress">{TICKET_STATUS_LABELS.InProgress}</SelectItem>
+                <SelectItem value="Resolved">{TICKET_STATUS_LABELS.Resolved}</SelectItem>
+                <SelectItem value="Closed">{TICKET_STATUS_LABELS.Closed}</SelectItem>
               </SelectContent>
             </Select>
 
@@ -889,10 +889,12 @@ export function TechnicianDashboard({
                   <SelectValue placeholder="انتخاب وضعیت جدید" />
                 </SelectTrigger>
                 <SelectContent className="font-iran">
-                  <SelectItem value="open">باز</SelectItem>
-                  <SelectItem value="in-progress">در حال انجام</SelectItem>
-                  <SelectItem value="resolved">حل شده</SelectItem>
-                  <SelectItem value="closed">بسته</SelectItem>
+                  <SelectItem value="Submitted">{TICKET_STATUS_LABELS.Submitted}</SelectItem>
+                  <SelectItem value="Viewed">{TICKET_STATUS_LABELS.Viewed}</SelectItem>
+                  <SelectItem value="Open">{TICKET_STATUS_LABELS.Open}</SelectItem>
+                  <SelectItem value="InProgress">{TICKET_STATUS_LABELS.InProgress}</SelectItem>
+                  <SelectItem value="Resolved">{TICKET_STATUS_LABELS.Resolved}</SelectItem>
+                  <SelectItem value="Closed">{TICKET_STATUS_LABELS.Closed}</SelectItem>
                 </SelectContent>
               </Select>
             </div>

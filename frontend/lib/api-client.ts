@@ -86,6 +86,19 @@ export async function apiRequest<TResponse>(
         // ignore
       }
     }
+    
+    // Handle 401 Unauthorized - clear invalid token and redirect to login
+    if (res.status === 401 && token && typeof window !== "undefined") {
+      console.warn("[apiRequest] 401 Unauthorized - clearing invalid token and redirecting to login");
+      // Clear auth data from localStorage
+      localStorage.removeItem("ticketing.auth.token");
+      localStorage.removeItem("ticketing.auth.user");
+      localStorage.removeItem("userEmail");
+      localStorage.removeItem("userName");
+      // Redirect to login page
+      window.location.href = "/login";
+    }
+    
     // Only log error if not silent (silent mode suppresses error spam for expected 404s)
     if (!silent) {
       console.error(`[apiRequest] ERROR ${method} ${url}:`, {

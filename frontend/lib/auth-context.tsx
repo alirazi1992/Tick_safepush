@@ -122,11 +122,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const me = await apiRequest<ApiUserDto>("/api/auth/me", {
         token: authToken,
+        silent: true, // Suppress error logging since we handle it here
       });
       const mapped = mapUser(me);
       setUser(mapped);
       persistSession(authToken, mapped);
-    } catch {
+    } catch (error: any) {
+      // If 401, token is invalid - clear session
+      if (error?.status === 401) {
+        console.warn("[AuthContext] Token invalid or expired, clearing session");
+      }
       clearSession();
       setUser(null);
       setToken(null);

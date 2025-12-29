@@ -553,7 +553,7 @@ export function EnhancedAutoAssignment({
       onTicketUpdate(ticket.id, {
         assignedTo: bestTech.id,
         assignedTechnicianName: bestTech.name,
-        status: ticket.status === "open" ? "in-progress" : ticket.status,
+        status: ticket.status === "Open" ? "InProgress" : ticket.status,
       })
 
       toast({

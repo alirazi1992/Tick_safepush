@@ -140,7 +140,7 @@ export function TwoStepTicketForm({ onClose, onSubmit, categoriesData }: TwoStep
       const ticketData = {
         title: data.title,
         description: data.description,
-        status: "open",
+        status: "Submitted",
         priority: data.priority,
         category: data.mainIssue,
         subcategory: data.subIssue,

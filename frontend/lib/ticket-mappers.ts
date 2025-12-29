@@ -1,20 +1,27 @@
 import type { ApiTicketMessageDto, ApiTicketPriority, ApiTicketResponse, ApiTicketStatus } from "@/lib/api-types"
 import type { CategoriesData } from "@/services/categories-types"
-import type { Ticket, TicketPriority, TicketResponse, TicketStatus } from "@/types"
+import type { Ticket, TicketPriority, TicketResponse } from "@/types"
+import type { TicketStatus } from "@/lib/ticket-status"
 
+// Direct mapping: API statuses now match frontend status type exactly
+// Backend sends: "Submitted" | "Viewed" | "Open" | "InProgress" | "Resolved" | "Closed"
+// Frontend uses the same enum keys internally and displays Persian labels via ticket-status.ts
 const statusFromApi: Record<ApiTicketStatus, TicketStatus> = {
-  New: "open",
-  InProgress: "in-progress",
-  WaitingForClient: "in-progress",
-  Resolved: "resolved",
-  Closed: "closed",
+  Submitted: "Submitted",
+  Viewed: "Viewed",
+  Open: "Open",
+  InProgress: "InProgress",
+  Resolved: "Resolved",
+  Closed: "Closed",
 }
 
 const statusToApi: Record<TicketStatus, ApiTicketStatus> = {
-  "in-progress": "InProgress",
-  open: "New",
-  resolved: "Resolved",
-  closed: "Closed",
+  Submitted: "Submitted",
+  Viewed: "Viewed",
+  Open: "Open",
+  InProgress: "InProgress",
+  Resolved: "Resolved",
+  Closed: "Closed",
 }
 
 const priorityFromApi: Record<ApiTicketPriority, TicketPriority> = {
@@ -40,9 +47,9 @@ const slugify = (value: string) =>
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "") || "category"
 
-export const mapApiStatusToUi = (status: ApiTicketStatus): TicketStatus => statusFromApi[status] ?? "open"
+export const mapApiStatusToUi = (status: ApiTicketStatus): TicketStatus => statusFromApi[status] ?? "Submitted"
 
-export const mapUiStatusToApi = (status: TicketStatus): ApiTicketStatus => statusToApi[status] ?? "InProgress"
+export const mapUiStatusToApi = (status: TicketStatus): ApiTicketStatus => statusToApi[status] ?? "Submitted"
 
 export const mapApiPriorityToUi = (priority: ApiTicketPriority): TicketPriority => priorityFromApi[priority] ?? "medium"
 
@@ -52,7 +59,7 @@ export const mapApiMessageToResponse = (message: ApiTicketMessageDto): TicketRes
   id: message.id,
   authorName: message.authorName,
   authorEmail: message.authorEmail,
-  status: message.status ? mapApiStatusToUi(message.status) : "in-progress",
+  status: message.status ? mapApiStatusToUi(message.status) : "Submitted",
   message: message.message,
   timestamp: message.createdAt,
 })

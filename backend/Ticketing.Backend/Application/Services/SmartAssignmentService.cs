@@ -57,7 +57,7 @@ public class SmartAssignmentService : ISmartAssignmentService
             var loadCount = await _context.Tickets
                 .CountAsync(t => 
                     t.TechnicianId == tech.Id && 
-                    (t.Status == TicketStatus.New || t.Status == TicketStatus.InProgress));
+                    (t.Status == TicketStatus.Submitted || t.Status == TicketStatus.Viewed || t.Status == TicketStatus.Open || t.Status == TicketStatus.InProgress));
 
             technicianLoads.Add((tech.Id, loadCount));
         }
@@ -90,7 +90,11 @@ public class SmartAssignmentService : ISmartAssignmentService
         // Assign technician to ticket - set BOTH TechnicianId AND AssignedToUserId for consistency
         ticket.TechnicianId = selectedTechnician.TechnicianId;
         ticket.AssignedToUserId = technician.UserId; // CRITICAL: Set to Technician.UserId for filtering/queries
-        ticket.Status = TicketStatus.InProgress;
+        // When assigning, set status to Open (not InProgress) - technician will change to InProgress when they start working
+        if (ticket.Status == TicketStatus.Submitted)
+        {
+            ticket.Status = TicketStatus.Open;
+        }
         ticket.UpdatedAt = DateTime.UtcNow;
 
         await _context.SaveChangesAsync();

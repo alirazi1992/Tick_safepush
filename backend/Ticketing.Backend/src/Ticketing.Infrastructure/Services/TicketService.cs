@@ -1615,8 +1615,8 @@ public class TicketService : ITicketService
                     Name = technician?.FullName ?? "Unknown",
                     WorkingOn = ws.WorkingOn,
                     Note = ws.Note,
-                    State = ws.State,
-                    UpdatedAt = ws.UpdatedAt
+                    State = ws.State ?? TicketTechnicianState.Assigned,
+                    UpdatedAt = ws.UpdatedAt ?? DateTime.UtcNow
                 });
             }
         }

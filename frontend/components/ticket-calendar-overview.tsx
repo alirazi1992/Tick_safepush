@@ -109,18 +109,17 @@ const statusMeta: Record<
   },
 };
 
-const statusLabels: Record<string, string> = {
-  open: "باز",
-  "in-progress": "در حال انجام",
-  resolved: "حل شده",
-  closed: "بسته",
-};
+import { TICKET_STATUS_LABELS } from "@/lib/ticket-status";
+
+const statusLabels = TICKET_STATUS_LABELS;
 
 const statusColors: Record<string, string> = {
-  open: "bg-rose-100 text-rose-700 border border-rose-200",
-  "in-progress": "bg-amber-100 text-amber-700 border border-amber-200",
-  resolved: "bg-emerald-100 text-emerald-700 border border-emerald-200",
-  closed: "bg-slate-100 text-slate-700 border border-slate-200",
+  Submitted: "bg-blue-100 text-blue-700 border border-blue-200",
+  Viewed: "bg-cyan-100 text-cyan-700 border border-cyan-200",
+  Open: "bg-rose-100 text-rose-700 border border-rose-200",
+  InProgress: "bg-amber-100 text-amber-700 border border-amber-200",
+  Resolved: "bg-emerald-100 text-emerald-700 border border-emerald-200",
+  Closed: "bg-slate-100 text-slate-700 border border-slate-200",
 };
 
 const statusCountText: Record<StatusBucket, string> = {
@@ -240,10 +239,7 @@ export function TicketCalendarOverview({
           id: ticket.id,
           ticketNumber: ticket.ticketNumber || `T-${ticket.id.substring(0, 8).toUpperCase()}`,
           title: ticket.title,
-          status: ticket.status === "New" ? "open" :
-                  ticket.status === "InProgress" ? "in-progress" :
-                  ticket.status === "Resolved" ? "resolved" :
-                  ticket.status === "Closed" ? "closed" : ticket.status,
+          status: ticket.status,
           priority: ticket.priority === "Low" ? "low" :
                     ticket.priority === "Medium" ? "medium" :
                     ticket.priority === "High" ? "high" :

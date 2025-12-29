@@ -15,7 +15,7 @@ public class SystemSettingsResponse
 
     // Ticketing Defaults
     public TicketPriority DefaultPriority { get; set; } = TicketPriority.Medium;
-    public TicketStatus DefaultStatus { get; set; } = TicketStatus.New;
+    public TicketStatus DefaultStatus { get; set; } = TicketStatus.Submitted;
     public int ResponseSlaHours { get; set; } = 24;
     public bool AutoAssignEnabled { get; set; } = false;
     public bool AllowClientAttachments { get; set; } = true;
@@ -67,7 +67,7 @@ public class SystemSettingsUpdateRequest
     public TicketPriority DefaultPriority { get; set; } = TicketPriority.Medium;
 
     [Required]
-    public TicketStatus DefaultStatus { get; set; } = TicketStatus.New;
+    public TicketStatus DefaultStatus { get; set; } = TicketStatus.Submitted;
 
     [Range(1, 168, ErrorMessage = "زمان SLA باید بین ۱ تا ۱۶۸ ساعت باشد")]
     public int ResponseSlaHours { get; set; } = 24;

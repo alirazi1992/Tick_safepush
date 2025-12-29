@@ -143,7 +143,7 @@ public static class SeedData
                     CategoryId = network.Id,
                     SubcategoryId = network.Subcategories.First(sc => sc.Name == "Internet Connection").Id,
                     Priority = TicketPriority.High,
-                    Status = TicketStatus.New,
+                    Status = TicketStatus.Submitted,
                     CreatedByUserId = client1.Id,
                     AssignedToUserId = tech1.Id,
                     TechnicianId = techProfile1?.Id,
@@ -186,7 +186,7 @@ public static class SeedData
                     CategoryId = hardware.Id,
                     SubcategoryId = hardware.Subcategories.First(sc => sc.Name == "Computer Not Working").Id,
                     Priority = TicketPriority.Low,
-                    Status = TicketStatus.WaitingForClient,
+                    Status = TicketStatus.Open,
                     CreatedByUserId = client2.Id,
                     AssignedToUserId = tech2.Id,
                     TechnicianId = techProfile2?.Id,
@@ -221,7 +221,7 @@ public static class SeedData
                     AuthorUserId = client1.Id,
                     Message = "Issue started after update",
                     CreatedAt = DateTime.UtcNow.AddDays(-2),
-                    Status = TicketStatus.New
+                    Status = TicketStatus.Submitted
                 },
                 new()
                 {
@@ -283,7 +283,7 @@ public static class SeedData
                 DefaultTheme = "system",
                 Timezone = "Asia/Tehran",
                 DefaultPriority = TicketPriority.Medium,
-                DefaultStatus = TicketStatus.New,
+                DefaultStatus = TicketStatus.Submitted,
                 ResponseSlaHours = 24,
                 AutoAssignEnabled = false,
                 AllowClientAttachments = true,

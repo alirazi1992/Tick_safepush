@@ -17,7 +17,7 @@ public class SystemSettings
 
     // Ticketing Defaults
     public TicketPriority DefaultPriority { get; set; } = TicketPriority.Medium;
-    public TicketStatus DefaultStatus { get; set; } = TicketStatus.New;
+    public TicketStatus DefaultStatus { get; set; } = TicketStatus.Submitted;
     public int ResponseSlaHours { get; set; } = 24;
     public bool AutoAssignEnabled { get; set; } = false;
     public bool AllowClientAttachments { get; set; } = true;

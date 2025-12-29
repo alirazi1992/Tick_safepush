@@ -130,7 +130,7 @@ export default function Home() {
           // Count active tickets assigned to this technician
           const activeTicketsCount = currentTickets.filter(
             (ticket) => ticket.assignedTo === tech.id && 
-                       (ticket.status === "open" || ticket.status === "in-progress")
+                       (ticket.status === "Open" || ticket.status === "InProgress")
           ).length;
           
           return {
@@ -458,7 +458,7 @@ export default function Home() {
         (ticket) => ticket.clientEmail === user.email
       );
       const newTicketCount = userTickets.filter(
-        (ticket) => ticket.status === "open"
+        (ticket) => ticket.status === "Open"
       ).length;
 
       return [
@@ -495,10 +495,10 @@ export default function Home() {
         (ticket) => ticket.assignedTechnicianEmail === user.email
       );
       const inProgressCount = technicianTickets.filter(
-        (ticket) => ticket.status === "in-progress"
+        (ticket) => ticket.status === "InProgress"
       ).length;
       const closedCount = technicianTickets.filter(
-        (ticket) => ticket.status === "resolved" || ticket.status === "closed"
+        (ticket) => ticket.status === "Resolved" || ticket.status === "Closed"
       ).length;
 
       return [
@@ -537,7 +537,7 @@ export default function Home() {
     }
 
     const openTicketsCount = tickets.filter(
-      (ticket) => ticket.status === "open"
+      (ticket) => ticket.status === "Open"
     ).length;
 
     return [

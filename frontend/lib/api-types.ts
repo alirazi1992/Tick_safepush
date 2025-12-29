@@ -28,7 +28,7 @@ export interface ApiSubcategoryResponse {
 }
 
 export type ApiTicketPriority = "Low" | "Medium" | "High" | "Critical"
-export type ApiTicketStatus = "New" | "InProgress" | "WaitingForClient" | "Resolved" | "Closed"
+export type ApiTicketStatus = "Submitted" | "Viewed" | "Open" | "InProgress" | "Resolved" | "Closed"
 
 export interface ApiTicketResponse {
   id: string

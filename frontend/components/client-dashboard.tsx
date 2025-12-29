@@ -44,6 +44,7 @@ import {
 } from "lucide-react";
 import type { CategoriesData } from "@/services/categories-types";
 import type { Ticket, TicketPriority, TicketStatus, TicketCategory } from "@/types";
+import { TICKET_STATUS_LABELS, type TicketStatus as TicketStatusType } from "@/lib/ticket-status";
 
 /* =========================
    Strong Types & Dictionaries
@@ -55,18 +56,15 @@ interface CurrentUser {
 }
 
 const statusColors: Record<TicketStatus, string> = {
-  open: "bg-red-100 text-red-800 border-red-200",
-  "in-progress": "bg-yellow-100 text-yellow-800 border-yellow-200",
-  resolved: "bg-green-100 text-green-800 border-green-200",
-  closed: "bg-gray-100 text-gray-800 border-gray-200",
+  Submitted: "bg-blue-100 text-blue-800 border-blue-200",
+  Viewed: "bg-cyan-100 text-cyan-800 border-cyan-200",
+  Open: "bg-red-100 text-red-800 border-red-200",
+  InProgress: "bg-yellow-100 text-yellow-800 border-yellow-200",
+  Resolved: "bg-green-100 text-green-800 border-green-200",
+  Closed: "bg-gray-100 text-gray-800 border-gray-200",
 };
 
-const statusLabels: Record<TicketStatus, string> = {
-  open: "باز",
-  "in-progress": "در حال انجام",
-  resolved: "حل شده",
-  closed: "بسته",
-};
+const statusLabels = TICKET_STATUS_LABELS;
 
 const priorityColors: Record<TicketPriority, string> = {
   low: "bg-blue-100 text-blue-800 border-blue-200",
@@ -154,9 +152,9 @@ export function ClientDashboard({
     return matchesSearch && matchesStatus && matchesPriority;
   });
 
-  const openTickets = userTickets.filter((t) => t.status === "open");
-  const inProgressTickets = userTickets.filter((t) => t.status === "in-progress");
-  const resolvedTickets = userTickets.filter((t) => t.status === "resolved");
+  const openTickets = userTickets.filter((t) => t.status === "Open");
+  const inProgressTickets = userTickets.filter((t) => t.status === "InProgress");
+  const resolvedTickets = userTickets.filter((t) => t.status === "Resolved");
 
   const handleViewTicket = (ticket: Ticket) => {
     setSelectedTicket(ticket);
@@ -375,10 +373,12 @@ export function ClientDashboard({
               </SelectTrigger>
               <SelectContent className="font-iran">
                 <SelectItem value="all">همه وضعیت‌ها</SelectItem>
-                <SelectItem value="open">باز</SelectItem>
-                <SelectItem value="in-progress">در حال انجام</SelectItem>
-                <SelectItem value="resolved">حل شده</SelectItem>
-                <SelectItem value="closed">بسته</SelectItem>
+                <SelectItem value="Submitted">{TICKET_STATUS_LABELS.Submitted}</SelectItem>
+                <SelectItem value="Viewed">{TICKET_STATUS_LABELS.Viewed}</SelectItem>
+                <SelectItem value="Open">{TICKET_STATUS_LABELS.Open}</SelectItem>
+                <SelectItem value="InProgress">{TICKET_STATUS_LABELS.InProgress}</SelectItem>
+                <SelectItem value="Resolved">{TICKET_STATUS_LABELS.Resolved}</SelectItem>
+                <SelectItem value="Closed">{TICKET_STATUS_LABELS.Closed}</SelectItem>
               </SelectContent>
             </Select>
 

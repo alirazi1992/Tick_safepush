@@ -13,19 +13,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { ArrowRight, Calendar, Hash, User, Flag, MessageSquare } from "lucide-react";
 import type { Ticket } from "@/types";
+import { TICKET_STATUS_LABELS, getTicketStatusLabel, type TicketStatus } from "@/lib/ticket-status";
 
-const statusLabels: Record<string, string> = {
-  open: "باز",
-  "in-progress": "در حال انجام",
-  resolved: "حل شده",
-  closed: "بسته",
-};
-
-const statusColors: Record<string, string> = {
-  open: "bg-rose-100 text-rose-700 border border-rose-200",
-  "in-progress": "bg-amber-100 text-amber-700 border border-amber-200",
-  resolved: "bg-emerald-100 text-emerald-700 border border-emerald-200",
-  closed: "bg-slate-100 text-slate-700 border border-slate-200",
+const statusColors: Record<TicketStatus, string> = {
+  Submitted: "bg-blue-100 text-blue-700 border border-blue-200",
+  Viewed: "bg-purple-100 text-purple-700 border border-purple-200",
+  Open: "bg-rose-100 text-rose-700 border border-rose-200",
+  InProgress: "bg-amber-100 text-amber-700 border border-amber-200",
+  Resolved: "bg-emerald-100 text-emerald-700 border border-emerald-200",
+  Closed: "bg-slate-100 text-slate-700 border border-slate-200",
 };
 
 const priorityLabels: Record<string, string> = {
@@ -111,8 +107,8 @@ export default function TicketDetailPage() {
               <div className="space-y-2">
                 <CardTitle className="text-2xl">{ticket.title}</CardTitle>
                 <div className="flex gap-2">
-                  <Badge className={statusColors[ticket.status]}>
-                    {statusLabels[ticket.status] || ticket.status}
+                  <Badge className={statusColors[ticket.status] || statusColors.Submitted}>
+                    {getTicketStatusLabel(ticket.status)}
                   </Badge>
                   <Badge>{priorityLabels[ticket.priority] || ticket.priority}</Badge>
                 </div>
@@ -140,7 +136,7 @@ export default function TicketDetailPage() {
               <div className="flex items-center gap-2">
                 <User className="h-4 w-4 text-muted-foreground" />
                 <span className="text-sm text-muted-foreground">تکنسین:</span>
-                <span className="text-sm font-medium">{ticket.assignedTechnician || "اختصاص نیافته"}</span>
+                <span className="text-sm font-medium">{ticket.assignedTechnicianName || "اختصاص نیافته"}</span>
               </div>
               <div className="flex items-center gap-2">
                 <Calendar className="h-4 w-4 text-muted-foreground" />
@@ -156,23 +152,23 @@ export default function TicketDetailPage() {
               </div>
             </div>
 
-            {ticket.messages && ticket.messages.length > 0 && (
+            {ticket.responses && ticket.responses.length > 0 && (
               <>
                 <Separator />
                 <div>
                   <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
                     <MessageSquare className="h-5 w-5" />
-                    پیام‌ها ({ticket.messages.length})
+                    پیام‌ها ({ticket.responses.length})
                   </h3>
                   <div className="space-y-4">
-                    {ticket.messages.map((message) => (
-                      <Card key={message.id}>
+                    {ticket.responses.map((message) => (
+                      <Card key={message.id || message.timestamp}>
                         <CardContent className="pt-6">
                           <div className="flex items-start justify-between mb-2">
                             <div>
                               <p className="font-medium">{message.authorName}</p>
                               <p className="text-xs text-muted-foreground">
-                                {new Date(message.createdAt).toLocaleString("fa-IR")}
+                                {new Date(message.timestamp).toLocaleString("fa-IR")}
                               </p>
                             </div>
                           </div>
