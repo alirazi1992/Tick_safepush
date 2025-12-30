@@ -54,14 +54,33 @@ export async function apiRequest<TResponse>(
     throw error;
   }
 
+  // Clone response for reading body (response can only be read once)
+  const responseClone = res.clone();
+  
+  // Log response status immediately
   console.log(`[apiRequest] ${method} ${url} → ${res.status} ${res.statusText}`);
 
   if (!res.ok) {
     let errorBody: unknown = null;
     let errorMessage = `API request failed with status ${res.status}`;
+    let responseText: string | null = null;
+    
     try {
-      errorBody = await res.json();
-      // Try to extract error message from response
+      // Try to read as text first to capture everything
+      responseText = await responseClone.text();
+      console.log(`[apiRequest] Response text (${res.status}):`, responseText.substring(0, 500));
+      
+      // Try to parse as JSON
+      if (responseText) {
+        try {
+          errorBody = JSON.parse(responseText);
+        } catch {
+          // Not JSON, use text as message
+          errorMessage = responseText;
+        }
+      }
+      
+      // Extract error message from JSON body
       if (errorBody && typeof errorBody === "object") {
         const body = errorBody as Record<string, unknown>;
         if (body.errors && typeof body.errors === "object") {
@@ -75,15 +94,15 @@ export async function apiRequest<TResponse>(
           errorMessage = body.message;
         } else if (body.title && typeof body.title === "string") {
           errorMessage = body.title;
+        } else if (body.detail && typeof body.detail === "string") {
+          errorMessage = body.detail;
         }
       }
-    } catch {
-      // If JSON parsing fails, try to get text
-      try {
-        const text = await res.text();
-        if (text) errorMessage = text;
-      } catch {
-        // ignore
+    } catch (parseError) {
+      // If all parsing fails, log the error
+      console.error(`[apiRequest] Failed to parse error response:`, parseError);
+      if (responseText) {
+        errorMessage = responseText;
       }
     }
     
