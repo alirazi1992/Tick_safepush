@@ -10,6 +10,7 @@ public class AppDbContext : DbContext
     public DbSet<TicketMessage> TicketMessages => Set<TicketMessage>();
     public DbSet<Category> Categories => Set<Category>();
     public DbSet<Subcategory> Subcategories => Set<Subcategory>();
+    public DbSet<SubcategoryFieldDefinition> SubcategoryFieldDefinitions => Set<SubcategoryFieldDefinition>();
     public DbSet<Attachment> Attachments => Set<Attachment>();
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<SystemSettings> SystemSettings => Set<SystemSettings>();

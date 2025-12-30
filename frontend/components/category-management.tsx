@@ -50,6 +50,11 @@ import type {
   ApiCategoryResponse,
   ApiSubcategoryResponse,
 } from "@/lib/api-types";
+import {
+  getFieldDefinitions,
+  createFieldDefinition,
+  type FieldDefinitionResponse,
+} from "@/lib/field-definitions-api";
 
 interface CategoryManagementProps {
   categoriesData?: any;
@@ -84,8 +89,9 @@ export function CategoryManagement({
 
   // Field designer state
   const [fieldDesignerOpen, setFieldDesignerOpen] = useState(false);
-  const [designingSubId, setDesigningSubId] = useState<string | null>(null);
+  const [designingSubId, setDesigningSubId] = useState<number | null>(null);
   const [editingFields, setEditingFields] = useState<FormFieldDef[]>([]);
+  const [fieldsLoading, setFieldsLoading] = useState(false);
   const [newField, setNewField] = useState<{
     id: string;
     label: string;
@@ -325,22 +331,111 @@ export function CategoryManagement({
     }
   };
 
-  // Dynamic Field Designer handlers (preserved for future use)
-  const openFieldDesigner = (subId: number) => {
-    // Field designer functionality can be added later if needed
+  // Dynamic Field Designer handlers
+  const openFieldDesigner = async (subId: number) => {
+    if (!token) {
+      toast({
+        title: "خطا",
+        description: "لطفاً ابتدا وارد سیستم شوید",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setDesigningSubId(subId);
+    setFieldDesignerOpen(true);
+    setEditingFields([]);
+    setFieldsLoading(true);
+
+    try {
+      const fields = await getFieldDefinitions(token, subId);
+      
+      // Convert API response to FormFieldDef format
+      const convertedFields: FormFieldDef[] = fields.map((f) => ({
+        id: f.key,
+        label: f.label,
+        type: mapBackendTypeToFrontendType(f.type),
+        required: f.isRequired,
+        placeholder: f.defaultValue || undefined,
+        options: f.options || [],
+      }));
+
+      setEditingFields(convertedFields);
+    } catch (error: any) {
+      console.error("[openFieldDesigner] Error loading fields:", error);
+      toast({
+        title: "خطا در بارگذاری فیلدها",
+        description: error?.message || "خطا در دریافت فیلدهای زیر دسته",
+        variant: "destructive",
+      });
+      // Still open modal with empty state
+      setEditingFields([]);
+    } finally {
+      setFieldsLoading(false);
+    }
+  };
+
+  const mapBackendTypeToFrontendType = (backendType: string): FieldType => {
+    const mapping: Record<string, FieldType> = {
+      Text: "text",
+      TextArea: "textarea",
+      Number: "number",
+      Email: "email",
+      Phone: "tel",
+      Date: "date",
+      Select: "select",
+      Boolean: "checkbox",
+    };
+    return mapping[backendType] || "text";
+  };
+
+  const mapFrontendTypeToBackendType = (frontendType: FieldType): string => {
+    const mapping: Record<FieldType, string> = {
+      text: "Text",
+      textarea: "TextArea",
+      number: "Number",
+      email: "Email",
+      tel: "Phone",
+      date: "Date",
+      datetime: "Date",
+      select: "Select",
+      radio: "Select",
+      checkbox: "Boolean",
+      file: "Text", // File upload not directly supported, use Text
+    };
+    return mapping[frontendType] || "Text";
+  };
+
+  const saveFieldDesigner = async () => {
+    if (!token || designingSubId === null) {
+      toast({
+        title: "خطا",
+        description: "اطلاعات ناقص است",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // For now, we only support adding new fields via addNewField
+    // In the future, we could add update/delete functionality here
+    setFieldDesignerOpen(false);
+    setDesigningSubId(null);
     toast({
-      title: "اطلاع",
-      description: "طراحی فیلدهای سفارشی در نسخه‌های بعدی اضافه خواهد شد",
+      title: "موفق",
+      description: "فیلدها ذخیره شدند",
     });
   };
 
-  const saveFieldDesigner = () => {
-    // Field designer functionality can be added later if needed
-    setFieldDesignerOpen(false);
-    setDesigningSubId(null);
-  };
+  const addNewField = async () => {
+    if (!token || designingSubId === null) {
+      toast({
+        title: "خطا",
+        description: "لطفاً ابتدا وارد سیستم شوید",
+        variant: "destructive",
+      });
+      return;
+    }
 
-  const addNewField = () => {
     if (!newField.id || !newField.label) {
       toast({
         title: "خطا",
@@ -357,28 +452,53 @@ export function CategoryManagement({
       });
       return;
     }
+
     const options =
       newField.type === "select" || newField.type === "radio"
         ? parseOptions(newField.optionsText || "")
         : [];
-    const toAdd: FormFieldDef = {
-      id: newField.id,
-      label: newField.label,
-      type: newField.type,
-      required: newField.required,
-      placeholder: newField.placeholder,
-      options,
-    };
-    setEditingFields((prev) => [...prev, toAdd]);
-    setNewField({
-      id: "",
-      label: "",
-      type: "text",
-      required: false,
-      placeholder: "",
-      optionsText: "",
-    });
-    toast({ title: "موفق", description: "فیلد اضافه شد" });
+
+    try {
+      // Create field via API
+      const backendType = mapFrontendTypeToBackendType(newField.type);
+      const createdField = await createFieldDefinition(token, designingSubId, {
+        name: newField.id,
+        label: newField.label,
+        key: newField.id,
+        type: backendType,
+        isRequired: newField.required,
+        defaultValue: newField.placeholder || undefined,
+        options: options.length > 0 ? options : undefined,
+      });
+
+      // Convert API response to FormFieldDef and add to local state
+      const toAdd: FormFieldDef = {
+        id: createdField.key,
+        label: createdField.label,
+        type: mapBackendTypeToFrontendType(createdField.type),
+        required: createdField.isRequired,
+        placeholder: createdField.defaultValue || undefined,
+        options: createdField.options || [],
+      };
+
+      setEditingFields((prev) => [...prev, toAdd]);
+      setNewField({
+        id: "",
+        label: "",
+        type: "text",
+        required: false,
+        placeholder: "",
+        optionsText: "",
+      });
+      toast({ title: "موفق", description: "فیلد اضافه شد و ذخیره شد" });
+    } catch (error: any) {
+      console.error("[addNewField] Error creating field:", error);
+      toast({
+        title: "خطا در ایجاد فیلد",
+        description: error?.message || "خطا در ذخیره فیلد",
+        variant: "destructive",
+      });
+    }
   };
 
   const updateField = (
