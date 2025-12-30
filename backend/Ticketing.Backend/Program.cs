@@ -89,6 +89,131 @@ static string ResolveSqliteDbPath(IConfiguration config, string contentRoot)
 }
 
 // =======================
+// Schema Guard: Ensures SubcategoryFieldDefinitions table has all required columns
+// =======================
+static async Task EnsureSubcategoryFieldDefinitionsSchemaAsync(
+    AppDbContext context,
+    ILogger logger,
+    string dbPath)
+{
+    try
+    {
+        logger.LogInformation("[SCHEMA_GUARD] Verifying SubcategoryFieldDefinitions table schema...");
+        
+        // Use PRAGMA table_info to check existing columns
+        var connection = context.Database.GetDbConnection();
+        var wasOpen = connection.State == System.Data.ConnectionState.Open;
+        
+        if (!wasOpen)
+        {
+            await connection.OpenAsync();
+        }
+        
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "PRAGMA table_info(SubcategoryFieldDefinitions)";
+            using (var reader = await command.ExecuteReaderAsync())
+            {
+                while (await reader.ReadAsync())
+                {
+                    var columnName = reader.GetString(1); // column name is at index 1
+                    columns.Add(columnName);
+                }
+            }
+        }
+
+        if (!wasOpen)
+        {
+            await connection.CloseAsync();
+        }
+
+        logger.LogInformation("[SCHEMA_GUARD] Existing columns: {Columns}", string.Join(", ", columns));
+
+        // Required columns with their SQL definitions (only nullable ones can be safely added)
+        var requiredColumns = new Dictionary<string, string>
+        {
+            { "DefaultValue", "TEXT" },
+            { "OptionsJson", "TEXT" },
+            { "Min", "REAL" },
+            { "Max", "REAL" }
+        };
+
+        var missingColumns = new List<string>();
+        foreach (var required in requiredColumns)
+        {
+            if (!columns.Contains(required.Key))
+            {
+                missingColumns.Add(required.Key);
+            }
+        }
+
+        if (missingColumns.Count == 0)
+        {
+            logger.LogInformation("[SCHEMA_GUARD] All required columns exist - schema is valid");
+            return;
+        }
+
+        logger.LogWarning("[SCHEMA_GUARD] Missing columns detected: {MissingColumns}", string.Join(", ", missingColumns));
+
+        // Backup database before making schema changes
+        if (File.Exists(dbPath))
+        {
+            var backupPath = $"{dbPath}.backup.{DateTime.UtcNow:yyyyMMddHHmmss}";
+            try
+            {
+                File.Copy(dbPath, backupPath, overwrite: true);
+                logger.LogInformation("[SCHEMA_GUARD] Database backed up to: {BackupPath}", backupPath);
+            }
+            catch (Exception backupEx)
+            {
+                logger.LogWarning(backupEx, "[SCHEMA_GUARD] Failed to create backup: {Error}", backupEx.Message);
+                // Continue anyway - schema fix is important
+            }
+        }
+
+        // Add missing columns one by one
+        foreach (var missingColumn in missingColumns)
+        {
+            try
+            {
+                var columnDef = requiredColumns[missingColumn];
+                var addColumnSql = $"ALTER TABLE SubcategoryFieldDefinitions ADD COLUMN {missingColumn} {columnDef};";
+                
+                logger.LogInformation("[SCHEMA_GUARD] Adding missing column: {Column} with definition: {Definition}", 
+                    missingColumn, columnDef);
+                
+                await context.Database.ExecuteSqlRawAsync(addColumnSql);
+                
+                logger.LogInformation("[SCHEMA_GUARD] Successfully added column: {Column}", missingColumn);
+            }
+            catch (Exception addEx)
+            {
+                // Check if column was added by another process or already exists
+                if (addEx.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase) ||
+                    addEx.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+                {
+                    logger.LogInformation("[SCHEMA_GUARD] Column {Column} already exists (possibly added concurrently)", missingColumn);
+                }
+                else
+                {
+                    logger.LogError(addEx, "[SCHEMA_GUARD] Failed to add column {Column}: {Error}", 
+                        missingColumn, addEx.Message);
+                    // Continue with other columns
+                }
+            }
+        }
+
+        logger.LogInformation("[SCHEMA_GUARD] Schema guard completed");
+    }
+    catch (Exception ex)
+    {
+        // Log but don't fail startup - let runtime handle errors
+        logger.LogWarning(ex, "[SCHEMA_GUARD] Schema guard encountered an error: {Error}", ex.Message);
+    }
+}
+
+// =======================
 // Application services
 // =======================
 builder.Services.AddScoped<IJwtTokenGenerator, JwtTokenGenerator>();
@@ -229,33 +354,9 @@ using (var scope = app.Services.CreateScope())
         logger.LogInformation("[MIGRATION] Migrations after apply: {Applied}", string.Join(", ", appliedAfter));
         logger.LogInformation("[MIGRATION] Database migration completed successfully");
         
-        // Post-migration safety check: Ensure DefaultValue column exists
-        // This handles cases where the migration didn't apply correctly
-        try
-        {
-            logger.LogInformation("[MIGRATION] Verifying DefaultValue column exists in SubcategoryFieldDefinitions...");
-            // Try to add the column - if it already exists, SQLite will return an error which we'll catch
-            await context.Database.ExecuteSqlRawAsync(@"
-                ALTER TABLE SubcategoryFieldDefinitions 
-                ADD COLUMN DefaultValue TEXT;
-            ");
-            logger.LogInformation("[MIGRATION] Successfully added DefaultValue column (was missing)");
-        }
-        catch (Exception columnEx)
-        {
-            // If column already exists, that's fine - just log and continue
-            if (columnEx.Message.Contains("duplicate column") || 
-                columnEx.Message.Contains("already exists") ||
-                columnEx.Message.Contains("column DefaultValue already exists"))
-            {
-                logger.LogInformation("[MIGRATION] DefaultValue column already exists - no action needed");
-            }
-            else
-            {
-                // Log other errors but don't fail startup
-                logger.LogWarning(columnEx, "[MIGRATION] Could not verify/add DefaultValue column: {Error}", columnEx.Message);
-            }
-        }
+        // Post-migration schema guard: Verify SubcategoryFieldDefinitions table schema
+        // This handles cases where migrations didn't apply correctly or schema drift occurred
+        await EnsureSubcategoryFieldDefinitionsSchemaAsync(context, logger, sqliteDbPath);
     }
     catch (Exception ex)
     {
@@ -267,30 +368,10 @@ using (var scope = app.Services.CreateScope())
         {
             logger.LogWarning("[MIGRATION] Column may already exist - this is acceptable. Continuing...");
         }
-        else if (ex.Message.Contains("no such column") && ex.Message.Contains("DefaultValue"))
+        else if (ex.Message.Contains("no such column"))
         {
-            // Migration might not have been applied - try to add the column manually
-            logger.LogWarning("[MIGRATION] DefaultValue column missing - attempting to add manually...");
-            try
-            {
-                await context.Database.ExecuteSqlRawAsync(@"
-                    ALTER TABLE SubcategoryFieldDefinitions 
-                    ADD COLUMN DefaultValue TEXT(500) NULL;
-                ");
-                logger.LogInformation("[MIGRATION] Successfully added DefaultValue column manually");
-            }
-            catch (Exception manualEx)
-            {
-                if (manualEx.Message.Contains("duplicate column") || manualEx.Message.Contains("already exists"))
-                {
-                    logger.LogWarning("[MIGRATION] Column already exists - continuing...");
-                }
-                else
-                {
-                    logger.LogError(manualEx, "[MIGRATION] Failed to add DefaultValue column manually: {Error}", manualEx.Message);
-                    // Don't throw - let the app continue and handle the error at runtime
-                }
-            }
+            // Schema drift detected - schema guard will handle it
+            logger.LogWarning("[MIGRATION] Schema drift detected - schema guard will attempt to fix on next startup");
         }
         else
         {
