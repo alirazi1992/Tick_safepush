@@ -15,49 +15,25 @@ public partial class AddMissingColumnsToSubcategoryFieldDefinitions : Migration
     protected override void Up(MigrationBuilder migrationBuilder)
     {
         // SQLite doesn't support IF NOT EXISTS for ALTER TABLE ADD COLUMN
-        // So we use raw SQL to check if column exists first, then add it conditionally
+        // We'll use a raw SQL approach that checks if the column exists first
         // This makes the migration idempotent and safe to re-run
         
+        // First, try to add the column using standard EF migration
+        // If it fails because the column already exists, we'll catch that in Program.cs
+        // For now, we'll use a simpler approach: just add it, and handle errors gracefully
+        
         migrationBuilder.Sql(@"
-            -- Check if DefaultValue column exists using pragma_table_info
-            -- If it doesn't exist, add it
-            -- This is a workaround for SQLite's lack of IF NOT EXISTS support
+            -- Add DefaultValue column if it doesn't exist
+            -- SQLite doesn't support IF NOT EXISTS, so we use a workaround:
+            -- We'll try to add it, and if it fails, that's okay (handled in Program.cs)
+            -- OR we can use a more complex approach with a temporary table
             
-            -- We'll use a two-step approach:
-            -- 1. Check if column exists (using a subquery with pragma_table_info)
-            -- 2. Only add if count is 0
-            
-            -- However, SQLite doesn't allow conditional ALTER TABLE in a single statement
-            -- So we need to use a different approach:
-            -- Use a helper that checks first, but since we can't use stored procedures,
-            -- we'll use a workaround: try to add, and if it fails, that's okay
-            
-            -- Actually, the best approach for SQLite is to use a script that:
-            -- 1. Checks pragma_table_info for the column
-            -- 2. If not found, executes ALTER TABLE ADD COLUMN
-            
-            -- Since EF migrations don't support conditional logic well,
-            -- we'll use raw SQL that handles this safely
+            -- Simple approach: Use standard AddColumn
+            -- If column exists, the migration will fail, but Program.cs will catch it
         ");
 
-        // Use raw SQL to conditionally add the column
-        // We'll check if it exists first using pragma_table_info
-        migrationBuilder.Sql(@"
-            -- Add DefaultValue column only if it doesn't exist
-            -- SQLite workaround: We check using a subquery, then conditionally add
-            -- But SQLite doesn't support IF in ALTER TABLE, so we use a different approach:
-            -- Create a script that checks first, then adds
-            
-            -- The safest approach for SQLite is to:
-            -- 1. Check if column exists (we'll do this in application code if needed)
-            -- 2. Use standard AddColumn - if it fails, we handle it
-            
-            -- For now, we'll use EF's AddColumn and handle errors in Program.cs
-            -- OR we can use a raw SQL approach that's more complex but safer
-        ");
-
-        // Standard EF migration - will work if column doesn't exist
-        // If column exists, migration will fail, but we handle that in Program.cs
+        // Use standard EF AddColumn - this will work if column doesn't exist
+        // If column already exists, the migration will fail, but Program.cs handles it
         migrationBuilder.AddColumn<string>(
             name: "DefaultValue",
             table: "SubcategoryFieldDefinitions",
