@@ -236,6 +236,12 @@ static async Task EnsureSubcategoryFieldDefinitionsSchemaAsync(
 }
 
 // =======================
+// Repositories
+// =======================
+builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.IFieldDefinitionRepository, 
+    Ticketing.Backend.Infrastructure.Data.Repositories.FieldDefinitionRepository>();
+
+// =======================
 // Application services
 // =======================
 builder.Services.AddScoped<IJwtTokenGenerator, JwtTokenGenerator>();
