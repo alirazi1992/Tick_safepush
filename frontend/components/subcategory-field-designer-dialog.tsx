@@ -554,7 +554,7 @@ export function SubcategoryFieldDesignerDialog({
             <div className="border rounded-lg p-4 overflow-y-auto">
               <h3 className="font-medium text-right mb-3">افزودن فیلد جدید</h3>
               <div className="space-y-3">
-            <div className="grid grid-cols-12 gap-3">
+                <div className="grid grid-cols-12 gap-3">
               <div className="col-span-12 md:col-span-4">
                 <Label className="text-right">
                   شناسه <span className="text-red-600">*</span>
@@ -663,8 +663,8 @@ export function SubcategoryFieldDesignerDialog({
                   )}
                 </div>
               )}
-              </div>
-              <div className="flex justify-end mt-4">
+                </div>
+                <div className="flex justify-end mt-4">
                 <Button
                   onClick={handleAddField}
                   disabled={saving || loading}
@@ -679,6 +679,7 @@ export function SubcategoryFieldDesignerDialog({
                     "افزودن فیلد"
                   )}
                 </Button>
+                </div>
               </div>
             </div>
           </div>
