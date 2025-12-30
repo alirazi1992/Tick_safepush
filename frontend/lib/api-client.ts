@@ -90,12 +90,12 @@ export async function apiRequest<TResponse>(
           if (Array.isArray(firstError) && firstError.length > 0) {
             errorMessage = String(firstError[0]);
           }
-        } else if (body.message && typeof body.message === "string") {
-          errorMessage = body.message;
-        } else if (body.title && typeof body.title === "string") {
-          errorMessage = body.title;
-        } else if (body.detail && typeof body.detail === "string") {
+        } else if (body.detail && typeof body.detail === "string") { // Prioritize ProblemDetails 'detail'
           errorMessage = body.detail;
+        } else if (body.title && typeof body.title === "string") { // Fallback to ProblemDetails 'title'
+          errorMessage = body.title;
+        } else if (body.message && typeof body.message === "string") { // Generic message
+          errorMessage = body.message;
         }
       }
     } catch (parseError) {
@@ -139,4 +139,6 @@ export async function apiRequest<TResponse>(
   }
 
   return (await res.json()) as TResponse;
+}
+
 }

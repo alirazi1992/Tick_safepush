@@ -50,6 +50,25 @@ export async function getFieldDefinitions(
       console.log(`[getFieldDefinitions] 404 for subcategory ${subcategoryId} - returning empty list`);
       return [];
     }
+    // Handle 500 errors that might be schema-related (e.g., missing DefaultValue column)
+    if (error?.status === 500) {
+      const errorBody = error?.body || {};
+      const errorMessage = error?.message || "";
+      const errorDetail = (errorBody as any)?.message || (errorBody as any)?.error || errorMessage;
+      
+      if (errorDetail.includes("DefaultValue") || 
+          errorDetail.includes("no such column") ||
+          errorDetail.includes("schema") ||
+          errorDetail.includes("migration") ||
+          errorDetail.includes("out of sync")) {
+        console.warn(`[getFieldDefinitions] Database schema error for subcategory ${subcategoryId}:`, errorDetail);
+        // Throw a user-friendly error that will be shown in the UI
+        const friendlyError = new Error("خطای پایگاه داده: لطفاً سرور بک‌اند را راه‌اندازی مجدد کنید تا مایگریشن‌ها اعمال شوند.");
+        (friendlyError as any).status = 500;
+        (friendlyError as any).body = errorBody;
+        throw friendlyError;
+      }
+    }
     throw error;
   }
 }
