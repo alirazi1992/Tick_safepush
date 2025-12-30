@@ -66,18 +66,24 @@ export async function apiRequest<TResponse>(
     let responseText: string | null = null;
     
     try {
+      // Clone the response to read body multiple times if needed
+      const clonedRes = res.clone();
       // Try to read as text first to capture everything
-      responseText = await responseClone.text();
-      console.log(`[apiRequest] Response text (${res.status}):`, responseText.substring(0, 500));
+      responseText = await clonedRes.text();
+      console.log(`[apiRequest] Response text (${res.status}):`, responseText ? responseText.substring(0, 500) : "(empty)");
       
       // Try to parse as JSON
-      if (responseText) {
+      if (responseText && responseText.trim()) {
         try {
           errorBody = JSON.parse(responseText);
-        } catch {
+          console.log(`[apiRequest] Parsed error body:`, errorBody);
+        } catch (parseErr) {
           // Not JSON, use text as message
+          console.log(`[apiRequest] Response is not JSON, using as text:`, responseText.substring(0, 200));
           errorMessage = responseText;
         }
+      } else {
+        console.warn(`[apiRequest] Empty response body for status ${res.status}`);
       }
       
       // Extract error message from JSON body
