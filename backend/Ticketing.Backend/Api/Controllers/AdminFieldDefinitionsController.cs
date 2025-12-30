@@ -63,13 +63,21 @@ public class AdminFieldDefinitionsController : ControllerBase
             
             // Check if it's a schema error (missing column)
             var errorMessage = dbEx.InnerException?.Message ?? dbEx.Message;
-            if (errorMessage.Contains("no such column") || errorMessage.Contains("DefaultValue"))
+            if (errorMessage.Contains("no such column") || errorMessage.Contains("DefaultValue") || 
+                errorMessage.Contains("schema") || errorMessage.Contains("column"))
             {
+                // Extract column name if possible
+                var columnMatch = System.Text.RegularExpressions.Regex.Match(
+                    errorMessage, @"no such column:?\s*(\w+)", 
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                var columnName = columnMatch.Success ? columnMatch.Groups[1].Value : "unknown";
+                
                 return StatusCode(500, new
                 {
-                    message = "Database schema is out of sync. Please restart the backend to apply migrations.",
-                    error = "Missing column: DefaultValue. The migration needs to be applied.",
-                    hint = "Restart the backend server - migrations are applied automatically on startup."
+                    message = "خطای پایگاه داده: لطفاً سرور بک‌اند را راه‌اندازی مجدد کنید تا مایگریشن‌ها اعمال شوند.",
+                    error = $"Missing column: {columnName}. The database schema needs to be updated.",
+                    hint = "Restart the backend server - migrations and schema guards are applied automatically on startup.",
+                    columnName = columnName
                 });
             }
             
@@ -87,22 +95,29 @@ public class AdminFieldDefinitionsController : ControllerBase
                 subcategoryId, sqliteEx.Message);
             
             // Check for schema errors
-            if (sqliteEx.Message.Contains("no such column") || sqliteEx.Message.Contains("DefaultValue"))
+            if (sqliteEx.Message.Contains("no such column") || sqliteEx.Message.Contains("DefaultValue") ||
+                sqliteEx.Message.Contains("schema"))
             {
+                var columnMatch = System.Text.RegularExpressions.Regex.Match(
+                    sqliteEx.Message, @"no such column:?\s*(\w+)", 
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                var columnName = columnMatch.Success ? columnMatch.Groups[1].Value : "unknown";
+                
                 _logger.LogWarning(
-                    "[AdminFieldDefinitions] Schema error detected - DefaultValue column missing. Migration should be applied on next startup.");
+                    "[AdminFieldDefinitions] Schema error detected - {ColumnName} column missing. Schema guard should fix on next startup.",
+                    columnName);
                 
                 return StatusCode(500, new ProblemDetails
                 {
                     Status = 500,
-                    Title = "Database Schema Error",
-                    Detail = "Database schema is out of sync. Please restart the backend to apply migrations.",
+                    Title = "خطای پایگاه داده",
+                    Detail = "لطفاً سرور بک‌اند را راه‌اندازی مجدد کنید تا مایگریشن‌ها اعمال شوند.",
                     Instance = HttpContext.Request.Path,
                     Extensions = 
                     {
                         { "error", sqliteEx.Message },
-                        { "hint", "Restart the backend server - migrations are applied automatically on startup." },
-                        { "missingColumn", "DefaultValue" }
+                        { "hint", "Restart the backend server - migrations and schema guards are applied automatically on startup." },
+                        { "missingColumn", columnName }
                     }
                 });
             }
