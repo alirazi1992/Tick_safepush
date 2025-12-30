@@ -1162,7 +1162,7 @@ export function AdminTicketManagement({ tickets, technicians: technicianOptions,
                         <div className="space-y-4">
                           {selectedTicket.responses.map((response: any, index: number) => {
                             const responseDateTime = formatDateTime(response.timestamp)
-                            const StatusIcon = statusIcons[response.status]
+                            const StatusIcon = statusIcons[response.status as TicketStatus] || AlertCircle
 
                             return (
                               <div key={index} className="border rounded-lg p-4 bg-white shadow-sm">
