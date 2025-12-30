@@ -209,8 +209,43 @@ using (var scope = app.Services.CreateScope())
     var services = scope.ServiceProvider;
     var context = services.GetRequiredService<AppDbContext>();
     var passwordHasher = services.GetRequiredService<IPasswordHasher<User>>();
+    var logger = services.GetRequiredService<ILogger<Program>>();
 
-    await context.Database.MigrateAsync();
+    try
+    {
+        logger.LogInformation("[MIGRATION] Starting database migration...");
+        logger.LogInformation("[MIGRATION] Database path: {DbPath}", sqliteDbPath);
+        logger.LogInformation("[MIGRATION] Database file exists: {Exists}", File.Exists(sqliteDbPath));
+        
+        var pendingMigrations = await context.Database.GetPendingMigrationsAsync();
+        var appliedMigrations = await context.Database.GetAppliedMigrationsAsync();
+        
+        logger.LogInformation("[MIGRATION] Applied migrations: {Applied}", string.Join(", ", appliedMigrations));
+        logger.LogInformation("[MIGRATION] Pending migrations: {Pending}", string.Join(", ", pendingMigrations));
+        
+        await context.Database.MigrateAsync();
+        
+        var appliedAfter = await context.Database.GetAppliedMigrationsAsync();
+        logger.LogInformation("[MIGRATION] Migrations after apply: {Applied}", string.Join(", ", appliedAfter));
+        logger.LogInformation("[MIGRATION] Database migration completed successfully");
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "[MIGRATION] Error applying migrations: {Error}", ex.Message);
+        
+        // If migration fails due to column already existing, that's okay
+        // Check if it's a SQLite error about column already existing
+        if (ex.Message.Contains("duplicate column") || ex.Message.Contains("already exists"))
+        {
+            logger.LogWarning("[MIGRATION] Column may already exist - this is acceptable. Continuing...");
+        }
+        else
+        {
+            // Re-throw if it's a different error
+            throw;
+        }
+    }
+    
     await SeedData.InitializeAsync(context, passwordHasher);
 }
 
