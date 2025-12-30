@@ -240,6 +240,10 @@ static async Task EnsureSubcategoryFieldDefinitionsSchemaAsync(
 // =======================
 builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.IFieldDefinitionRepository, 
     Ticketing.Backend.Infrastructure.Data.Repositories.FieldDefinitionRepository>();
+builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.ICategoryRepository, 
+    Ticketing.Backend.Infrastructure.Data.Repositories.CategoryRepository>();
+builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.IUnitOfWork, 
+    Ticketing.Backend.Infrastructure.Data.Repositories.UnitOfWork>();
 
 // =======================
 // Application services
