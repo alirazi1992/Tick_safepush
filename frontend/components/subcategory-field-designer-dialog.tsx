@@ -44,6 +44,7 @@ export function SubcategoryFieldDesignerDialog({
 }: SubcategoryFieldDesignerDialogProps) {
   const [fields, setFields] = useState<FieldDefinitionResponse[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [deletingIndex, setDeletingIndex] = useState<number | null>(null);
@@ -93,16 +94,24 @@ export function SubcategoryFieldDesignerDialog({
     if (!token) return;
 
     setLoading(true);
+    setError(null);
     try {
       const loadedFields = await getFieldDefinitions(token, subcategoryId);
       setFields(loadedFields);
+      setError(null);
     } catch (error: any) {
       console.error("[SubcategoryFieldDesigner] Error loading fields:", error);
+      const errorMessage = error?.message || `خطا در دریافت فیلدها (${error?.status || "unknown"})`;
+      setError(errorMessage);
+      
+      // Check if it's a schema error
+      if (errorMessage.includes("schema") || errorMessage.includes("migration") || errorMessage.includes("DefaultValue")) {
+        setError("خطای پایگاه داده: لطفاً سرور بک‌اند را راه‌اندازی مجدد کنید تا مایگریشن‌ها اعمال شوند.");
+      }
+      
       toast({
         title: "خطا در بارگذاری فیلدها",
-        description:
-          error?.message ||
-          `خطا در دریافت فیلدها (${error?.status || "unknown"})`,
+        description: errorMessage,
         variant: "destructive",
       });
       setFields([]);
@@ -321,7 +330,7 @@ export function SubcategoryFieldDesignerDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto font-iran" dir="rtl">
+      <DialogContent className="max-w-6xl max-h-[90vh] overflow-hidden flex flex-col font-iran" dir="rtl">
         <DialogHeader>
           <DialogTitle className="text-right">
             طراحی فیلدهای سفارشی
@@ -329,8 +338,23 @@ export function SubcategoryFieldDesignerDialog({
           </DialogTitle>
         </DialogHeader>
 
+        {/* Error State */}
+        {error && !loading && (
+          <div className="border border-red-300 rounded-lg p-4 bg-red-50 mb-4">
+            <p className="text-sm text-red-800 mb-2">{error}</p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={loadFields}
+              className="text-red-700 border-red-300"
+            >
+              تلاش مجدد
+            </Button>
+          </div>
+        )}
+
         {/* Loading State */}
-        {loading && fields.length === 0 && (
+        {loading && fields.length === 0 && !error && (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
             <span className="mr-2 text-sm text-muted-foreground">
@@ -339,21 +363,22 @@ export function SubcategoryFieldDesignerDialog({
           </div>
         )}
 
-        {/* Empty State */}
-        {!loading && fields.length === 0 && (
-          <div className="border rounded-lg p-6 text-center">
-            <p className="text-sm text-muted-foreground">
-              هیچ فیلدی تعریف نشده است. می‌توانید فیلدهای جدید اضافه کنید.
-            </p>
-          </div>
-        )}
-
-        {/* Existing Fields List */}
-        {!loading && fields.length > 0 && (
-          <div className="space-y-3">
-            <h3 className="font-medium text-right">فیلدهای موجود</h3>
-            <div className="space-y-2">
-              {fields.map((field, index) => (
+        {/* Main Content: Two Column Layout */}
+        {!loading && !error && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 flex-1 overflow-hidden">
+            {/* Left Side: Existing Fields List */}
+            <div className="border rounded-lg p-4 overflow-y-auto">
+              <h3 className="font-medium text-right mb-3">فیلدهای موجود</h3>
+              
+              {fields.length === 0 ? (
+                <div className="border rounded-lg p-6 text-center">
+                  <p className="text-sm text-muted-foreground">
+                    هیچ فیلدی تعریف نشده است.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {fields.map((field, index) => (
                 <div
                   key={field.id}
                   className="border rounded-lg p-4 space-y-3"
@@ -519,15 +544,15 @@ export function SubcategoryFieldDesignerDialog({
                     </div>
                   )}
                 </div>
-              ))}
+                  ))}
+                </div>
+              )}
             </div>
-          </div>
-        )}
 
-        {/* Add New Field Section */}
-        <div className="border-t pt-4 mt-4">
-          <h3 className="font-medium text-right mb-3">افزودن فیلد جدید</h3>
-          <div className="space-y-3">
+            {/* Right Side: Add Field Form */}
+            <div className="border rounded-lg p-4 overflow-y-auto">
+              <h3 className="font-medium text-right mb-3">افزودن فیلد جدید</h3>
+              <div className="space-y-3">
             <div className="grid grid-cols-12 gap-3">
               <div className="col-span-12 md:col-span-4">
                 <Label className="text-right">
@@ -637,26 +662,29 @@ export function SubcategoryFieldDesignerDialog({
                   )}
                 </div>
               )}
-            </div>
-            <div className="flex justify-end">
-              <Button
-                onClick={handleAddField}
-                disabled={saving || loading}
-              >
-                {saving ? (
-                  <>
-                    <Loader2 className="w-4 h-4 ml-1 animate-spin" />
-                    در حال ذخیره...
-                  </>
-                ) : (
-                  "افزودن فیلد"
-                )}
-              </Button>
+              </div>
+              <div className="flex justify-end mt-4">
+                <Button
+                  onClick={handleAddField}
+                  disabled={saving || loading}
+                  className="w-full"
+                >
+                  {saving ? (
+                    <>
+                      <Loader2 className="w-4 h-4 ml-1 animate-spin" />
+                      در حال ذخیره...
+                    </>
+                  ) : (
+                    "افزودن فیلد"
+                  )}
+                </Button>
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </DialogContent>
     </Dialog>
   );
 }
+
 

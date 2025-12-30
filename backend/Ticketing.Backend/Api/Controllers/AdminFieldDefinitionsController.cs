@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Data.Sqlite;
 using Ticketing.Backend.Application.DTOs;
 using Ticketing.Backend.Application.Services;
 using Ticketing.Backend.Domain.Enums;
@@ -60,11 +61,46 @@ public class AdminFieldDefinitionsController : ControllerBase
                 "[AdminFieldDefinitions] GetFields database error - SubcategoryId: {SubcategoryId}, Error: {Error}, Inner: {InnerError}",
                 subcategoryId, dbEx.Message, dbEx.InnerException?.Message);
             
+            // Check if it's a schema error (missing column)
+            var errorMessage = dbEx.InnerException?.Message ?? dbEx.Message;
+            if (errorMessage.Contains("no such column") || errorMessage.Contains("DefaultValue"))
+            {
+                return StatusCode(500, new
+                {
+                    message = "Database schema is out of sync. Please restart the backend to apply migrations.",
+                    error = "Missing column: DefaultValue. The migration needs to be applied.",
+                    hint = "Restart the backend server - migrations are applied automatically on startup."
+                });
+            }
+            
             return StatusCode(500, new
             {
                 message = "Database error occurred while retrieving fields. Please ensure migrations are applied.",
                 error = dbEx.Message,
                 innerError = dbEx.InnerException?.Message
+            });
+        }
+        catch (Microsoft.Data.Sqlite.SqliteException sqliteEx)
+        {
+            _logger.LogError(sqliteEx,
+                "[AdminFieldDefinitions] GetFields SQLite error - SubcategoryId: {SubcategoryId}, Error: {Error}",
+                subcategoryId, sqliteEx.Message);
+            
+            // Check for schema errors
+            if (sqliteEx.Message.Contains("no such column") || sqliteEx.Message.Contains("DefaultValue"))
+            {
+                return StatusCode(500, new
+                {
+                    message = "Database schema is out of sync. Please restart the backend to apply migrations.",
+                    error = sqliteEx.Message,
+                    hint = "Restart the backend server - migrations are applied automatically on startup."
+                });
+            }
+            
+            return StatusCode(500, new
+            {
+                message = "Database error occurred while retrieving fields.",
+                error = sqliteEx.Message
             });
         }
         catch (Exception ex)
