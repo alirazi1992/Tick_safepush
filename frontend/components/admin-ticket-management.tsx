@@ -42,26 +42,26 @@ import {
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import { TicketCalendarOverview } from "./ticket-calendar-overview"
+import { TICKET_STATUS_LABELS, type TicketStatus } from "@/lib/ticket-status"
 
-const statusColors: Record<string, string> = {
-  open: "bg-red-100 text-red-800 border-red-200",
-  "in-progress": "bg-yellow-100 text-yellow-800 border-yellow-200",
-  resolved: "bg-green-100 text-green-800 border-green-200",
-  closed: "bg-gray-100 text-gray-800 border-gray-200",
+const statusColors: Record<TicketStatus, string> = {
+  Submitted: "bg-blue-100 text-blue-800 border-blue-200",
+  Viewed: "bg-purple-100 text-purple-800 border-purple-200",
+  Open: "bg-red-100 text-red-800 border-red-200",
+  InProgress: "bg-yellow-100 text-yellow-800 border-yellow-200",
+  Resolved: "bg-green-100 text-green-800 border-green-200",
+  Closed: "bg-gray-100 text-gray-800 border-gray-200",
 }
 
-const statusLabels: Record<string, string> = {
-  open: "باز",
-  "in-progress": "در حال انجام",
-  resolved: "حل شده",
-  closed: "بسته",
-}
+const statusLabels = TICKET_STATUS_LABELS
 
-const statusIcons: Record<string, LucideIcon> = {
-  open: AlertCircle,
-  "in-progress": Clock,
-  resolved: CheckCircle,
-  closed: XCircle,
+const statusIcons: Record<TicketStatus, LucideIcon> = {
+  Submitted: AlertCircle,
+  Viewed: Eye,
+  Open: AlertCircle,
+  InProgress: Clock,
+  Resolved: CheckCircle,
+  Closed: XCircle,
 }
 
 const priorityColors: Record<string, string> = {
@@ -190,7 +190,7 @@ export function AdminTicketManagement({ tickets, technicians: technicianOptions,
     setTechnicians((prev) =>
       prev.map((tech) => {
         const assignedTickets = tickets.filter(
-          (ticket) => ticket.assignedTo === tech.id && (ticket.status === "open" || ticket.status === "in-progress"),
+          (ticket) => ticket.assignedTo === tech.id && (ticket.status === "Open" || ticket.status === "InProgress"),
         )
 
         return {
@@ -404,7 +404,7 @@ export function AdminTicketManagement({ tickets, technicians: technicianOptions,
                 <tr>
                   <td>${ticket.id}</td>
                   <td>${ticket.title}</td>
-                  <td class="status-${ticket.status}">${statusLabels[ticket.status]}</td>
+                  <td class="status-${ticket.status}">${statusLabels[ticket.status as TicketStatus] || "نامشخص"}</td>
                   <td class="priority-${ticket.priority}">${priorityLabels[ticket.priority]}</td>
                   <td>${getCategoryLabel(ticket)}</td>
                   <td>${ticket.clientName}</td>
@@ -450,7 +450,7 @@ export function AdminTicketManagement({ tickets, technicians: technicianOptions,
       ...ticketsToExport.map((ticket) => [
         ticket.id,
         ticket.title,
-        statusLabels[ticket.status],
+        statusLabels[ticket.status as TicketStatus] || "نامشخص",
         priorityLabels[ticket.priority],
         getCategoryLabel(ticket),
         ticket.clientName,
@@ -500,7 +500,7 @@ export function AdminTicketManagement({ tickets, technicians: technicianOptions,
         await onTicketUpdate(ticket.id, {
           assignedTo: recommendedTech.id,
           assignedTechnicianName: recommendedTech.name,
-          status: ticket.status === "open" ? "in-progress" : ticket.status,
+          status: ticket.status === "Open" ? "InProgress" : ticket.status,
         })
 
         toast({
@@ -692,10 +692,12 @@ export function AdminTicketManagement({ tickets, technicians: technicianOptions,
               </SelectTrigger>
               <SelectContent className="font-iran">
                 <SelectItem value="all">همه وضعیت‌ها</SelectItem>
-                <SelectItem value="open">باز</SelectItem>
-                <SelectItem value="in-progress">در حال انجام</SelectItem>
-                <SelectItem value="resolved">حل شده</SelectItem>
-                <SelectItem value="closed">بسته</SelectItem>
+                <SelectItem value="Submitted">ثبت شد</SelectItem>
+                <SelectItem value="Viewed">مشاهده شد</SelectItem>
+                <SelectItem value="Open">باز</SelectItem>
+                <SelectItem value="InProgress">در حال انجام</SelectItem>
+                <SelectItem value="Resolved">حل شده</SelectItem>
+                <SelectItem value="Closed">بسته</SelectItem>
               </SelectContent>
             </Select>
 
@@ -814,8 +816,8 @@ export function AdminTicketManagement({ tickets, technicians: technicianOptions,
                           </div>
                         </TableCell>
                         <TableCell>
-                          <Badge className={`${statusColors[ticket.status]} font-iran`}>
-                            {statusLabels[ticket.status]}
+                          <Badge className={`${statusColors[ticket.status as TicketStatus] || "bg-gray-100 text-gray-800 border-gray-200"} font-iran`}>
+                            {statusLabels[ticket.status as TicketStatus] || "نامشخص"}
                           </Badge>
                         </TableCell>
                         <TableCell>
@@ -1056,9 +1058,9 @@ export function AdminTicketManagement({ tickets, technicians: technicianOptions,
                   <div className="text-right space-y-3">
                     <h2 className="text-2xl font-bold font-iran text-gray-900">{selectedTicket.title}</h2>
                     <div className="flex gap-3 items-center">
-                      <Badge className={`${statusColors[selectedTicket.status]} font-iran text-sm px-3 py-1`}>
-                        {React.createElement(statusIcons[selectedTicket.status], { className: "w-4 h-4 ml-1" })}
-                        {statusLabels[selectedTicket.status]}
+                      <Badge className={`${statusColors[selectedTicket.status as TicketStatus] || "bg-gray-100 text-gray-800 border-gray-200"} font-iran text-sm px-3 py-1`}>
+                        {React.createElement(statusIcons[selectedTicket.status as TicketStatus] || AlertCircle, { className: "w-4 h-4 ml-1" })}
+                        {statusLabels[selectedTicket.status as TicketStatus] || "نامشخص"}
                       </Badge>
                       <Badge className={`${priorityColors[selectedTicket.priority]} font-iran text-sm px-3 py-1`}>
                         {priorityLabels[selectedTicket.priority]}
@@ -1177,9 +1179,9 @@ export function AdminTicketManagement({ tickets, technicians: technicianOptions,
                                     </div>
                                   </div>
                                   <div className="text-left space-y-2">
-                                    <Badge className={`${statusColors[response.status]} font-iran text-xs`}>
+                                    <Badge className={`${statusColors[response.status as TicketStatus] || "bg-gray-100 text-gray-800 border-gray-200"} font-iran text-xs`}>
                                       <StatusIcon className="w-3 h-3 ml-1" />
-                                      {statusLabels[response.status]}
+                                      {statusLabels[response.status as TicketStatus] || "نامشخص"}
                                     </Badge>
                                     <div className="text-xs text-muted-foreground font-iran">
                                       <div className="flex items-center gap-1 justify-end">
