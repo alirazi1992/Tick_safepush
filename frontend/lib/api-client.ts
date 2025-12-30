@@ -54,9 +54,6 @@ export async function apiRequest<TResponse>(
     throw error;
   }
 
-  // Clone response for reading body (response can only be read once)
-  const responseClone = res.clone();
-  
   // Log response status immediately
   console.log(`[apiRequest] ${method} ${url} → ${res.status} ${res.statusText}`);
 
@@ -66,7 +63,7 @@ export async function apiRequest<TResponse>(
     let responseText: string | null = null;
     
     try {
-      // Clone the response to read body multiple times if needed
+      // Clone the response to read body (response can only be read once)
       const clonedRes = res.clone();
       // Try to read as text first to capture everything
       responseText = await clonedRes.text();
