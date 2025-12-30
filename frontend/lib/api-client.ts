@@ -73,14 +73,17 @@ export async function apiRequest<TResponse>(
       if (responseText && responseText.trim()) {
         try {
           errorBody = JSON.parse(responseText);
-          console.log(`[apiRequest] Parsed error body:`, errorBody);
+          console.log(`[apiRequest] Parsed error body:`, JSON.stringify(errorBody, null, 2));
         } catch (parseErr) {
           // Not JSON, use text as message
           console.log(`[apiRequest] Response is not JSON, using as text:`, responseText.substring(0, 200));
           errorMessage = responseText;
+          // Store the text as the body for debugging
+          errorBody = { rawText: responseText };
         }
       } else {
         console.warn(`[apiRequest] Empty response body for status ${res.status}`);
+        errorBody = { empty: true };
       }
       
       // Extract error message from JSON body
