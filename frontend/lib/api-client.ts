@@ -140,5 +140,3 @@ export async function apiRequest<TResponse>(
 
   return (await res.json()) as TResponse;
 }
-
-}
