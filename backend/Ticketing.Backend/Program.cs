@@ -229,49 +229,31 @@ using (var scope = app.Services.CreateScope())
         logger.LogInformation("[MIGRATION] Migrations after apply: {Applied}", string.Join(", ", appliedAfter));
         logger.LogInformation("[MIGRATION] Database migration completed successfully");
         
-        // Post-migration check: Ensure DefaultValue column exists in SubcategoryFieldDefinitions
-        // This is a safety check in case the migration didn't apply correctly
+        // Post-migration safety check: Ensure DefaultValue column exists
+        // This handles cases where the migration didn't apply correctly
         try
         {
-            var columnExists = await context.Database.ExecuteSqlRawAsync(@"
-                SELECT COUNT(*) FROM pragma_table_info('SubcategoryFieldDefinitions') 
-                WHERE name = 'DefaultValue';
+            logger.LogInformation("[MIGRATION] Verifying DefaultValue column exists in SubcategoryFieldDefinitions...");
+            // Try to add the column - if it already exists, SQLite will return an error which we'll catch
+            await context.Database.ExecuteSqlRawAsync(@"
+                ALTER TABLE SubcategoryFieldDefinitions 
+                ADD COLUMN DefaultValue TEXT;
             ");
-            
-            // Check if column exists by trying to query it
-            var testQuery = await context.Database.ExecuteSqlRawAsync(@"
-                SELECT COUNT(*) FROM SubcategoryFieldDefinitions LIMIT 1;
-            ");
-            
-            // If we got here without error, try to check for DefaultValue column
-            // SQLite doesn't have a direct way to check, so we'll try to add it if missing
-            logger.LogInformation("[MIGRATION] Verifying DefaultValue column exists...");
+            logger.LogInformation("[MIGRATION] Successfully added DefaultValue column (was missing)");
         }
-        catch (Exception checkEx)
+        catch (Exception columnEx)
         {
-            // If query fails due to missing column, add it manually
-            if (checkEx.Message.Contains("no such column") && checkEx.Message.Contains("DefaultValue"))
+            // If column already exists, that's fine - just log and continue
+            if (columnEx.Message.Contains("duplicate column") || 
+                columnEx.Message.Contains("already exists") ||
+                columnEx.Message.Contains("column DefaultValue already exists"))
             {
-                logger.LogWarning("[MIGRATION] DefaultValue column missing - adding manually...");
-                try
-                {
-                    await context.Database.ExecuteSqlRawAsync(@"
-                        ALTER TABLE SubcategoryFieldDefinitions 
-                        ADD COLUMN DefaultValue TEXT;
-                    ");
-                    logger.LogInformation("[MIGRATION] Successfully added DefaultValue column manually");
-                }
-                catch (Exception addEx)
-                {
-                    if (addEx.Message.Contains("duplicate column") || addEx.Message.Contains("already exists"))
-                    {
-                        logger.LogInformation("[MIGRATION] DefaultValue column already exists");
-                    }
-                    else
-                    {
-                        logger.LogWarning(addEx, "[MIGRATION] Could not add DefaultValue column: {Error}", addEx.Message);
-                    }
-                }
+                logger.LogInformation("[MIGRATION] DefaultValue column already exists - no action needed");
+            }
+            else
+            {
+                // Log other errors but don't fail startup
+                logger.LogWarning(columnEx, "[MIGRATION] Could not verify/add DefaultValue column: {Error}", columnEx.Message);
             }
         }
     }
