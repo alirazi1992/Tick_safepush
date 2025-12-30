@@ -1,5 +1,5 @@
-using Microsoft.EntityFrameworkCore;
 using Ticketing.Backend.Application.DTOs;
+using Ticketing.Backend.Application.Repositories;
 using Ticketing.Backend.Domain.Entities;
 using Ticketing.Backend.Domain.Enums;
 using Ticketing.Backend.Infrastructure.Data;
@@ -17,34 +17,29 @@ public interface IFieldDefinitionService
 
 public class FieldDefinitionService : IFieldDefinitionService
 {
-    private readonly AppDbContext _context;
+    private readonly IFieldDefinitionRepository _fieldDefinitionRepository;
+    private readonly AppDbContext _context; // Still needed for Subcategory lookup and SaveChanges
     private readonly ILogger<FieldDefinitionService> _logger;
 
-    public FieldDefinitionService(AppDbContext context, ILogger<FieldDefinitionService> logger)
+    public FieldDefinitionService(
+        IFieldDefinitionRepository fieldDefinitionRepository,
+        AppDbContext context,
+        ILogger<FieldDefinitionService> logger)
     {
+        _fieldDefinitionRepository = fieldDefinitionRepository;
         _context = context;
         _logger = logger;
     }
 
     public async Task<IEnumerable<FieldDefinitionResponse>> GetFieldDefinitionsAsync(int subcategoryId, bool includeInactive = false)
     {
-        var query = _context.SubcategoryFieldDefinitions
-            .Where(f => f.SubcategoryId == subcategoryId);
-
-        if (!includeInactive)
-        {
-            // For now, we don't have an IsActive field, so return all
-            // This can be added later if needed
-        }
-
-        var fields = await query.OrderBy(f => f.Id).ToListAsync();
-        
+        var fields = await _fieldDefinitionRepository.GetBySubcategoryIdAsync(subcategoryId, includeInactive);
         return fields.Select(MapToResponse);
     }
 
     public async Task<FieldDefinitionResponse?> GetFieldDefinitionAsync(int id)
     {
-        var field = await _context.SubcategoryFieldDefinitions.FindAsync(id);
+        var field = await _fieldDefinitionRepository.GetByIdAsync(id);
         return field == null ? null : MapToResponse(field);
     }
 
@@ -59,10 +54,8 @@ public class FieldDefinitionService : IFieldDefinitionService
         }
 
         // Check for duplicate key
-        var existing = await _context.SubcategoryFieldDefinitions
-            .FirstOrDefaultAsync(f => f.SubcategoryId == subcategoryId && f.Key == request.Key);
-        
-        if (existing != null)
+        var exists = await _fieldDefinitionRepository.ExistsAsync(subcategoryId, request.Key);
+        if (exists)
         {
             throw new InvalidOperationException($"A field with key '{request.Key}' already exists for this subcategory.");
         }
@@ -93,7 +86,7 @@ public class FieldDefinitionService : IFieldDefinitionService
             Max = request.Max
         };
 
-        await _context.SubcategoryFieldDefinitions.AddAsync(field);
+        await _fieldDefinitionRepository.AddAsync(field);
         await _context.SaveChangesAsync();
 
         _logger.LogInformation("Created field definition {FieldId} for subcategory {SubcategoryId}", field.Id, subcategoryId);
@@ -112,10 +105,8 @@ public class FieldDefinitionService : IFieldDefinitionService
         // Check for duplicate key (if key is being changed)
         if (request.Key != null && request.Key != field.Key)
         {
-            var existing = await _context.SubcategoryFieldDefinitions
-                .FirstOrDefaultAsync(f => f.SubcategoryId == field.SubcategoryId && f.Key == request.Key && f.Id != id);
-            
-            if (existing != null)
+            var exists = await _fieldDefinitionRepository.ExistsAsync(field.SubcategoryId, request.Key);
+            if (exists)
             {
                 throw new InvalidOperationException($"A field with key '{request.Key}' already exists for this subcategory.");
             }
@@ -145,6 +136,7 @@ public class FieldDefinitionService : IFieldDefinitionService
             throw new InvalidOperationException("Select field type requires at least one option.");
         }
 
+        await _fieldDefinitionRepository.UpdateAsync(field);
         await _context.SaveChangesAsync();
 
         _logger.LogInformation("Updated field definition {FieldId}", id);
@@ -154,13 +146,12 @@ public class FieldDefinitionService : IFieldDefinitionService
 
     public async Task<bool> DeleteFieldDefinitionAsync(int id)
     {
-        var field = await _context.SubcategoryFieldDefinitions.FindAsync(id);
-        if (field == null)
+        var deleted = await _fieldDefinitionRepository.DeleteAsync(id);
+        if (!deleted)
         {
             return false;
         }
 
-        _context.SubcategoryFieldDefinitions.Remove(field);
         await _context.SaveChangesAsync();
 
         _logger.LogInformation("Deleted field definition {FieldId}", id);
