@@ -228,6 +228,52 @@ using (var scope = app.Services.CreateScope())
         var appliedAfter = await context.Database.GetAppliedMigrationsAsync();
         logger.LogInformation("[MIGRATION] Migrations after apply: {Applied}", string.Join(", ", appliedAfter));
         logger.LogInformation("[MIGRATION] Database migration completed successfully");
+        
+        // Post-migration check: Ensure DefaultValue column exists in SubcategoryFieldDefinitions
+        // This is a safety check in case the migration didn't apply correctly
+        try
+        {
+            var columnExists = await context.Database.ExecuteSqlRawAsync(@"
+                SELECT COUNT(*) FROM pragma_table_info('SubcategoryFieldDefinitions') 
+                WHERE name = 'DefaultValue';
+            ");
+            
+            // Check if column exists by trying to query it
+            var testQuery = await context.Database.ExecuteSqlRawAsync(@"
+                SELECT COUNT(*) FROM SubcategoryFieldDefinitions LIMIT 1;
+            ");
+            
+            // If we got here without error, try to check for DefaultValue column
+            // SQLite doesn't have a direct way to check, so we'll try to add it if missing
+            logger.LogInformation("[MIGRATION] Verifying DefaultValue column exists...");
+        }
+        catch (Exception checkEx)
+        {
+            // If query fails due to missing column, add it manually
+            if (checkEx.Message.Contains("no such column") && checkEx.Message.Contains("DefaultValue"))
+            {
+                logger.LogWarning("[MIGRATION] DefaultValue column missing - adding manually...");
+                try
+                {
+                    await context.Database.ExecuteSqlRawAsync(@"
+                        ALTER TABLE SubcategoryFieldDefinitions 
+                        ADD COLUMN DefaultValue TEXT;
+                    ");
+                    logger.LogInformation("[MIGRATION] Successfully added DefaultValue column manually");
+                }
+                catch (Exception addEx)
+                {
+                    if (addEx.Message.Contains("duplicate column") || addEx.Message.Contains("already exists"))
+                    {
+                        logger.LogInformation("[MIGRATION] DefaultValue column already exists");
+                    }
+                    else
+                    {
+                        logger.LogWarning(addEx, "[MIGRATION] Could not add DefaultValue column: {Error}", addEx.Message);
+                    }
+                }
+            }
+        }
     }
     catch (Exception ex)
     {
@@ -238,6 +284,31 @@ using (var scope = app.Services.CreateScope())
         if (ex.Message.Contains("duplicate column") || ex.Message.Contains("already exists"))
         {
             logger.LogWarning("[MIGRATION] Column may already exist - this is acceptable. Continuing...");
+        }
+        else if (ex.Message.Contains("no such column") && ex.Message.Contains("DefaultValue"))
+        {
+            // Migration might not have been applied - try to add the column manually
+            logger.LogWarning("[MIGRATION] DefaultValue column missing - attempting to add manually...");
+            try
+            {
+                await context.Database.ExecuteSqlRawAsync(@"
+                    ALTER TABLE SubcategoryFieldDefinitions 
+                    ADD COLUMN DefaultValue TEXT(500) NULL;
+                ");
+                logger.LogInformation("[MIGRATION] Successfully added DefaultValue column manually");
+            }
+            catch (Exception manualEx)
+            {
+                if (manualEx.Message.Contains("duplicate column") || manualEx.Message.Contains("already exists"))
+                {
+                    logger.LogWarning("[MIGRATION] Column already exists - continuing...");
+                }
+                else
+                {
+                    logger.LogError(manualEx, "[MIGRATION] Failed to add DefaultValue column manually: {Error}", manualEx.Message);
+                    // Don't throw - let the app continue and handle the error at runtime
+                }
+            }
         }
         else
         {

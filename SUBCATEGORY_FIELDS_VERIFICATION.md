@@ -252,3 +252,6 @@ If you see 500 errors:
 ✅ **Auto-Applied**: Migration runs automatically on backend startup
 ✅ **No Data Loss**: All existing data is preserved
 
+
+
+
