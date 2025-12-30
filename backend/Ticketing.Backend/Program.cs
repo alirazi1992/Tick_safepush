@@ -109,6 +109,28 @@ static async Task EnsureSubcategoryFieldDefinitionsSchemaAsync(
             await connection.OpenAsync();
         }
         
+        // First, check if table exists
+        bool tableExists = false;
+        using (var checkTableCommand = connection.CreateCommand())
+        {
+            checkTableCommand.CommandText = @"
+                SELECT name FROM sqlite_master 
+                WHERE type='table' AND name='SubcategoryFieldDefinitions';
+            ";
+            var result = await checkTableCommand.ExecuteScalarAsync();
+            tableExists = result != null;
+        }
+        
+        if (!tableExists)
+        {
+            logger.LogWarning("[SCHEMA_GUARD] Table SubcategoryFieldDefinitions does not exist. Migrations should have created it.");
+            if (!wasOpen)
+            {
+                await connection.CloseAsync();
+            }
+            return; // Table will be created by migrations, schema guard only fixes existing tables
+        }
+        
         var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         using (var command = connection.CreateCommand())
         {
