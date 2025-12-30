@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -69,28 +69,7 @@ export function SubcategoryFieldDesignerDialog({
   // Validation errors
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  // Load fields when dialog opens
-  useEffect(() => {
-    if (open && token && subcategoryId) {
-      loadFields();
-    } else {
-      // Reset state when dialog closes
-      setFields([]);
-      setEditingIndex(null);
-      setDeletingIndex(null);
-      setNewField({
-        key: "",
-        label: "",
-        type: "text",
-        isRequired: false,
-        defaultValue: "",
-        optionsText: "",
-      });
-      setErrors({});
-    }
-  }, [open, token, subcategoryId]);
-
-  const loadFields = async () => {
+  const loadFields = useCallback(async () => {
     if (!token) return;
 
     setLoading(true);
@@ -118,7 +97,29 @@ export function SubcategoryFieldDesignerDialog({
     } finally {
       setLoading(false);
     }
-  };
+  }, [token, subcategoryId]);
+
+  // Load fields when dialog opens
+  useEffect(() => {
+    if (open && token && subcategoryId) {
+      loadFields();
+    } else {
+      // Reset state when dialog closes
+      setFields([]);
+      setEditingIndex(null);
+      setDeletingIndex(null);
+      setNewField({
+        key: "",
+        label: "",
+        type: "text",
+        isRequired: false,
+        defaultValue: "",
+        optionsText: "",
+      });
+      setErrors({});
+      setError(null);
+    }
+  }, [open, token, subcategoryId, loadFields]);
 
   const validateNewField = (): boolean => {
     const newErrors: Record<string, string> = {};
