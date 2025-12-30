@@ -25,7 +25,7 @@ function Write-Error-Status {
 
 function Write-Success {
     param([string]$Message)
-    Write-Host "[SANITY] ✓ $Message" -ForegroundColor Green
+    Write-Host "[SANITY] OK: $Message" -ForegroundColor Green
 }
 
 # Get script directory
@@ -90,7 +90,7 @@ if (-not $SkipBackend) {
                 Write-Status "Checking migrations..."
                 $migrationsPath = Join-Path $backendPath "Infrastructure\Data\Migrations"
                 if (Test-Path $migrationsPath) {
-                    $migrations = Get-ChildItem -Path $migrationsPath -Filter "*.cs" -Exclude "*Designer.cs", "*Snapshot.cs"
+                    $migrations = Get-ChildItem -Path $migrationsPath -Filter "*.cs" | Where-Object { $_.Name -notlike "*Designer.cs" -and $_.Name -notlike "*Snapshot.cs" }
                     Write-Success "Found $($migrations.Count) migration(s)"
                 } else {
                     Write-Error-Status "Migrations directory not found"
@@ -189,8 +189,8 @@ Write-Status "`n=== Sanity Check Summary ===" "Cyan"
 if ($script:ExitCode -eq 0) {
     Write-Success "All checks passed!"
     Write-Status "`nNext steps:" "Gray"
-    Write-Status "  1. Start backend: cd backend\Ticketing.Backend && dotnet run" "Gray"
-    Write-Status "  2. Start frontend: cd frontend && npm run dev" "Gray"
+    Write-Status "  1. Start backend: cd backend\Ticketing.Backend; dotnet run" "Gray"
+    Write-Status "  2. Start frontend: cd frontend; npm run dev" "Gray"
     Write-Status "  3. Test endpoints: http://localhost:5000/swagger" "Gray"
 } else {
     Write-Error-Status "Some checks failed. Review errors above."
@@ -201,4 +201,3 @@ if ($script:ExitCode -eq 0) {
 }
 
 exit $script:ExitCode
-
