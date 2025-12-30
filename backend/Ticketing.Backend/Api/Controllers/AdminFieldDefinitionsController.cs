@@ -89,11 +89,21 @@ public class AdminFieldDefinitionsController : ControllerBase
             // Check for schema errors
             if (sqliteEx.Message.Contains("no such column") || sqliteEx.Message.Contains("DefaultValue"))
             {
-                return StatusCode(500, new
+                _logger.LogWarning(
+                    "[AdminFieldDefinitions] Schema error detected - DefaultValue column missing. Migration should be applied on next startup.");
+                
+                return StatusCode(500, new ProblemDetails
                 {
-                    message = "Database schema is out of sync. Please restart the backend to apply migrations.",
-                    error = sqliteEx.Message,
-                    hint = "Restart the backend server - migrations are applied automatically on startup."
+                    Status = 500,
+                    Title = "Database Schema Error",
+                    Detail = "Database schema is out of sync. Please restart the backend to apply migrations.",
+                    Instance = HttpContext.Request.Path,
+                    Extensions = 
+                    {
+                        { "error", sqliteEx.Message },
+                        { "hint", "Restart the backend server - migrations are applied automatically on startup." },
+                        { "missingColumn", "DefaultValue" }
+                    }
                 });
             }
             
