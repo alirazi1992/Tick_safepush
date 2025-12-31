@@ -1,8 +1,7 @@
 using System;
-using Microsoft.EntityFrameworkCore;
 using Ticketing.Backend.Application.DTOs;
+using Ticketing.Backend.Application.Repositories;
 using Ticketing.Backend.Domain.Entities;
-using Ticketing.Backend.Infrastructure.Data;
 
 namespace Ticketing.Backend.Application.Services;
 
@@ -21,20 +20,19 @@ public interface ICategoryService
 
 public class CategoryService : ICategoryService
 {
-    private readonly AppDbContext _context;
+    private readonly ICategoryRepository _repository;
+    private readonly IUnitOfWork _unitOfWork;
 
-    public CategoryService(AppDbContext context)
+    public CategoryService(ICategoryRepository repository, IUnitOfWork unitOfWork)
     {
-        _context = context;
+        _repository = repository;
+        _unitOfWork = unitOfWork;
     }
 
     public async Task<IEnumerable<CategoryResponse>> GetAllAsync()
     {
         // Public endpoint - only return active categories
-        var categories = await _context.Categories
-            .Include(c => c.Subcategories)
-            .Where(c => c.IsActive)
-            .ToListAsync();
+        var categories = await _repository.GetActiveCategoriesAsync();
         return categories.Select(c => new CategoryResponse
         {
             Id = c.Id,
@@ -50,19 +48,9 @@ public class CategoryService : ICategoryService
 
     public async Task<CategoryListResponse> GetAdminCategoriesAsync(string? search = null, int page = 1, int pageSize = 50)
     {
-        var query = _context.Categories.Include(c => c.Subcategories).AsQueryable();
-
-        if (!string.IsNullOrWhiteSpace(search))
-        {
-            query = query.Where(c => c.Name.Contains(search) || (c.Description != null && c.Description.Contains(search)));
-        }
-
-        var totalCount = await query.CountAsync();
-        var items = await query
-            .OrderBy(c => c.Name)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .ToListAsync();
+        var skip = (page - 1) * pageSize;
+        var totalCount = await _repository.CountAsync(search);
+        var items = await _repository.SearchAsync(search, skip, pageSize);
 
         return new CategoryListResponse
         {
@@ -76,8 +64,8 @@ public class CategoryService : ICategoryService
     public async Task<CategoryResponse?> CreateAsync(CategoryRequest request, IEnumerable<SubcategoryRequest>? subcategories = null)
     {
         // Check for duplicate name
-        var existing = await _context.Categories.FirstOrDefaultAsync(c => c.Name == request.Name);
-        if (existing != null)
+        var exists = await _repository.ExistsByNameAsync(request.Name);
+        if (exists)
         {
             throw new InvalidOperationException($"Category with name '{request.Name}' already exists");
         }
@@ -97,23 +85,23 @@ public class CategoryService : ICategoryService
             }).ToList() ?? new List<Subcategory>()
         };
 
-        _context.Categories.Add(category);
-        await _context.SaveChangesAsync();
+        await _repository.AddAsync(category);
+        await _unitOfWork.SaveChangesAsync();
 
         return MapToResponse(category);
     }
 
     public async Task<CategoryResponse?> UpdateAsync(int id, CategoryRequest request)
     {
-        var category = await _context.Categories.Include(c => c.Subcategories).FirstOrDefaultAsync(c => c.Id == id);
+        var category = await _repository.GetByIdWithSubcategoriesAsync(id);
         if (category == null)
         {
             return null;
         }
 
         // Check for duplicate name (excluding current category)
-        var existing = await _context.Categories.FirstOrDefaultAsync(c => c.Name == request.Name && c.Id != id);
-        if (existing != null)
+        var exists = await _repository.ExistsByNameExcludingIdAsync(request.Name, id);
+        if (exists)
         {
             throw new InvalidOperationException($"Category with name '{request.Name}' already exists");
         }
@@ -121,16 +109,14 @@ public class CategoryService : ICategoryService
         category.Name = request.Name;
         category.Description = request.Description;
         category.IsActive = request.IsActive;
-        await _context.SaveChangesAsync();
+        await _repository.UpdateAsync(category);
+        await _unitOfWork.SaveChangesAsync();
         return MapToResponse(category);
     }
 
     public async Task<bool> DeleteAsync(int id)
     {
-        var category = await _context.Categories
-            .Include(c => c.Tickets)
-            .Include(c => c.Subcategories)
-            .FirstOrDefaultAsync(c => c.Id == id);
+        var category = await _repository.GetByIdWithTicketsAndSubcategoriesAsync(id);
         if (category == null)
         {
             return false;
@@ -148,32 +134,31 @@ public class CategoryService : ICategoryService
             throw new InvalidOperationException("Cannot delete category that has subcategories. Please delete subcategories first.");
         }
 
-        _context.Categories.Remove(category);
-        await _context.SaveChangesAsync();
+        var deleted = await _repository.DeleteAsync(id);
+        if (deleted)
+        {
+            await _unitOfWork.SaveChangesAsync();
+        }
         return true;
     }
 
     public async Task<IEnumerable<SubcategoryResponse>> GetSubcategoriesAsync(int categoryId)
     {
-        var subcategories = await _context.Subcategories
-            .Where(s => s.CategoryId == categoryId)
-            .OrderBy(s => s.Name)
-            .ToListAsync();
+        var subcategories = await _repository.GetSubcategoriesByCategoryIdAsync(categoryId);
         return subcategories.Select(MapSubcategoryToResponse);
     }
 
     public async Task<SubcategoryResponse?> CreateSubcategoryAsync(int categoryId, SubcategoryRequest request)
     {
-        var category = await _context.Categories.FirstOrDefaultAsync(c => c.Id == categoryId);
+        var category = await _repository.GetByIdAsync(categoryId);
         if (category == null)
         {
             return null;
         }
 
         // Check for duplicate name within the category
-        var existing = await _context.Subcategories
-            .FirstOrDefaultAsync(s => s.CategoryId == categoryId && s.Name == request.Name);
-        if (existing != null)
+        var exists = await _repository.SubcategoryExistsByNameAsync(categoryId, request.Name);
+        if (exists)
         {
             throw new InvalidOperationException($"Subcategory with name '{request.Name}' already exists in this category");
         }
@@ -187,24 +172,23 @@ public class CategoryService : ICategoryService
             CreatedAt = DateTime.UtcNow
         };
 
-        _context.Subcategories.Add(subcategory);
-        await _context.SaveChangesAsync();
+        await _repository.AddSubcategoryAsync(subcategory);
+        await _unitOfWork.SaveChangesAsync();
 
         return MapSubcategoryToResponse(subcategory);
     }
 
     public async Task<SubcategoryResponse?> UpdateSubcategoryAsync(int id, SubcategoryRequest request)
     {
-        var subcategory = await _context.Subcategories.FirstOrDefaultAsync(s => s.Id == id);
+        var subcategory = await _repository.GetSubcategoryByIdAsync(id);
         if (subcategory == null)
         {
             return null;
         }
 
         // Check for duplicate name within the same category (excluding current subcategory)
-        var existing = await _context.Subcategories
-            .FirstOrDefaultAsync(s => s.CategoryId == subcategory.CategoryId && s.Name == request.Name && s.Id != id);
-        if (existing != null)
+        var exists = await _repository.SubcategoryExistsByNameExcludingIdAsync(subcategory.CategoryId, request.Name, id);
+        if (exists)
         {
             throw new InvalidOperationException($"Subcategory with name '{request.Name}' already exists in this category");
         }
@@ -212,16 +196,15 @@ public class CategoryService : ICategoryService
         subcategory.Name = request.Name;
         subcategory.Description = request.Description;
         subcategory.IsActive = request.IsActive;
-        await _context.SaveChangesAsync();
+        await _repository.UpdateSubcategoryAsync(subcategory);
+        await _unitOfWork.SaveChangesAsync();
 
         return MapSubcategoryToResponse(subcategory);
     }
 
     public async Task<bool> DeleteSubcategoryAsync(int id)
     {
-        var subcategory = await _context.Subcategories
-            .Include(s => s.Tickets)
-            .FirstOrDefaultAsync(s => s.Id == id);
+        var subcategory = await _repository.GetSubcategoryByIdWithTicketsAsync(id);
         if (subcategory == null)
         {
             return false;
@@ -233,8 +216,11 @@ public class CategoryService : ICategoryService
             throw new InvalidOperationException("Cannot delete subcategory that is used by tickets. Consider deactivating it instead.");
         }
 
-        _context.Subcategories.Remove(subcategory);
-        await _context.SaveChangesAsync();
+        var deleted = await _repository.DeleteSubcategoryAsync(id);
+        if (deleted)
+        {
+            await _unitOfWork.SaveChangesAsync();
+        }
         return true;
     }
 
