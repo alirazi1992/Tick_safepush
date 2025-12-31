@@ -259,6 +259,64 @@ dotnet build
 dotnet run
 ```
 
+#### Port 5000 Already In Use
+
+**Symptom:** 
+```
+System.IO.IOException: Failed to bind to address http://127.0.0.1:5000: address already in use.
+```
+
+**Cause:** A previous backend instance is still running, or another application is using port 5000.
+
+**Solution (Recommended):**
+```powershell
+# Use the safe backend runner script
+cd backend\Ticketing.Backend
+.\tools\run-backend.ps1
+```
+
+This script will:
+- Detect processes using port 5000
+- Verify they are this backend project (safety check)
+- Stop only the correct backend processes
+- Start a fresh backend instance
+
+**Manual Solution:**
+If the script doesn't work or you need to investigate:
+
+1. **Find what's using port 5000:**
+   ```powershell
+   netstat -ano | findstr :5000
+   ```
+   Look for the PID in the last column.
+
+2. **Check if it's our backend:**
+   ```powershell
+   # Replace <PID> with the actual process ID
+   tasklist /FI "PID eq <PID>"
+   ```
+
+3. **Stop the process:**
+   ```powershell
+   # Only if it's confirmed to be our backend!
+   taskkill /PID <PID> /F
+   ```
+
+4. **Then start backend:**
+   ```powershell
+   cd backend\Ticketing.Backend
+   dotnet run
+   ```
+
+**Development Mode Diagnostics:**
+When running in Development mode, the backend will automatically detect port conflicts and print helpful diagnostics including:
+- PID of the process using port 5000
+- Process name and path
+- Exact commands to fix the issue
+
+**Prevention:**
+Always use `.\tools\run-backend.ps1` to start the backend. It handles stale processes automatically.
+
 #### Migration Errors
 
 **Symptom:** "Migration already applied" or "Column already exists" errors.
