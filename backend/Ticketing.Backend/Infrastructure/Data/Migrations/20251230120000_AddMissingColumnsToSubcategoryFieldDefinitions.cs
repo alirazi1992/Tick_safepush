@@ -17,20 +17,13 @@ public partial class AddMissingColumnsToSubcategoryFieldDefinitions : Migration
         // Idempotent migration: Add DefaultValue column only if it doesn't exist
         // This migration is a safety net for databases that were created before
         // the initial migration included DefaultValue, or if the column was somehow missing.
-        // Uses PRAGMA table_info to check if column exists before adding.
-        
-        migrationBuilder.Sql(@"
-            -- Check if DefaultValue column exists using PRAGMA table_info
-            -- If it doesn't exist, add it. This makes the migration idempotent.
-            -- Note: SQLite doesn't support IF NOT EXISTS for ALTER TABLE ADD COLUMN,
-            -- so we use a workaround with a temporary table and data migration if needed.
-            -- However, the simplest approach is to attempt the ADD COLUMN and catch
-            -- "duplicate column" errors in Program.cs, which is already implemented.
-            
-            -- For EF Core migrations, we'll use AddColumn which will attempt to add the column.
-            -- If the column already exists, SQLite will throw an error, but Program.cs
-            -- migration error handler will catch it and allow the app to continue.
-        ");
+        // Note: SQLite doesn't support IF NOT EXISTS for ALTER TABLE ADD COLUMN,
+        // so we use a workaround with a temporary table and data migration if needed.
+        // However, the simplest approach is to attempt the ADD COLUMN and catch
+        // "duplicate column" errors in Program.cs, which is already implemented.
+        // For EF Core migrations, we'll use AddColumn which will attempt to add the column.
+        // If the column already exists, SQLite will throw an error, but Program.cs
+        // migration error handler will catch it and allow the app to continue.
 
         // Attempt to add the column using EF's AddColumn
         // If the column already exists (from initial migration), SQLite will throw
