@@ -449,4 +449,98 @@ app.MapGet("/api/ping", () => Results.Ok(new { message = "pong" }));
 
 app.MapControllers();
 
+// =======================
+// Port 5000 Preflight Check (Development only)
+// =======================
+if (app.Environment.IsDevelopment())
+{
+    var logger = app.Services.GetRequiredService<ILogger<Program>>();
+    const int defaultPort = 5000;
+    
+    try
+    {
+        // Try to detect if port 5000 is already in use
+        using var testSocket = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, defaultPort);
+        testSocket.Start();
+        testSocket.Stop();
+    }
+    catch (System.Net.Sockets.SocketException ex) when (ex.SocketErrorCode == System.Net.Sockets.SocketError.AddressAlreadyInUse)
+    {
+        logger.LogError("=");
+        logger.LogError("PORT CONFLICT DETECTED");
+        logger.LogError("=");
+        logger.LogError("Port {Port} is already in use. Backend cannot start.", defaultPort);
+        logger.LogError("");
+        logger.LogError("DIAGNOSTICS:");
+        logger.LogError("  Run this command to find the process using port {Port}:", defaultPort);
+        logger.LogError("    netstat -ano | findstr :{Port}", defaultPort);
+        logger.LogError("");
+        logger.LogError("SOLUTION:");
+        logger.LogError("  1. Run the safe backend runner script:");
+        logger.LogError("     .\\tools\\run-backend.ps1");
+        logger.LogError("");
+        logger.LogError("  2. Or manually stop the process:");
+        logger.LogError("     - Find PID using: netstat -ano | findstr :{Port}", defaultPort);
+        logger.LogError("     - Stop it: taskkill /PID <pid> /F");
+        logger.LogError("");
+        
+        // Try to get more info about what's using the port (Windows-specific)
+        if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
+        {
+            try
+            {
+                var process = new System.Diagnostics.Process
+                {
+                    StartInfo = new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "netstat",
+                        Arguments = "-ano",
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        CreateNoWindow = true
+                    }
+                };
+                process.Start();
+                var output = process.StandardOutput.ReadToEnd();
+                process.WaitForExit();
+                
+                var lines = output.Split('\n');
+                foreach (var line in lines)
+                {
+                    if (line.Contains($":{defaultPort}") && line.Contains("LISTENING"))
+                    {
+                        var parts = line.Trim().Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                        if (parts.Length >= 2 && int.TryParse(parts.Last(), out var pid))
+                        {
+                            try
+                            {
+                                var blockingProcess = System.Diagnostics.Process.GetProcessById(pid);
+                                logger.LogError("  Process using port {Port}:", defaultPort);
+                                logger.LogError("    PID: {Pid}", pid);
+                                logger.LogError("    Name: {Name}", blockingProcess.ProcessName);
+                                logger.LogError("    Path: {Path}", blockingProcess.MainModule?.FileName ?? "N/A");
+                                logger.LogError("");
+                            }
+                            catch
+                            {
+                                logger.LogError("  Process using port {Port}: PID {Pid} (could not get details)", defaultPort, pid);
+                            }
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // Ignore errors in diagnostics
+            }
+        }
+        
+        logger.LogError("=");
+        logger.LogError("");
+        
+        // Exit gracefully instead of throwing a stack trace
+        Environment.Exit(1);
+    }
+}
+
 app.Run();
