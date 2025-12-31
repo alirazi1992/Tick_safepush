@@ -1,9 +1,8 @@
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Ticketing.Backend.Application.DTOs;
+using Ticketing.Backend.Application.Repositories;
 using Ticketing.Backend.Domain.Entities;
 using Ticketing.Backend.Domain.Enums;
-using Ticketing.Backend.Infrastructure.Data;
 
 namespace Ticketing.Backend.Application.Services;
 
@@ -32,29 +31,32 @@ public interface ITechnicianService
 
 public class TechnicianService : ITechnicianService
 {
-    private readonly AppDbContext _context;
+    private readonly ITechnicianRepository _technicianRepository;
+    private readonly IUserRepository _userRepository;
+    private readonly IUnitOfWork _unitOfWork;
     private readonly ILogger<TechnicianService> _logger;
 
-    public TechnicianService(AppDbContext context, ILogger<TechnicianService> logger)
+    public TechnicianService(
+        ITechnicianRepository technicianRepository,
+        IUserRepository userRepository,
+        IUnitOfWork unitOfWork,
+        ILogger<TechnicianService> logger)
     {
-        _context = context;
+        _technicianRepository = technicianRepository;
+        _userRepository = userRepository;
+        _unitOfWork = unitOfWork;
         _logger = logger;
     }
 
     public async Task<IEnumerable<TechnicianResponse>> GetAllTechniciansAsync()
     {
-        var technicians = await _context.Technicians
-            .OrderBy(t => t.FullName)
-            .ToListAsync();
-
+        var technicians = await _technicianRepository.GetAllAsync();
         return technicians.Select(MapToResponse);
     }
 
     public async Task<TechnicianResponse?> GetTechnicianByIdAsync(Guid id)
     {
-        var technician = await _context.Technicians
-            .FirstOrDefaultAsync(t => t.Id == id);
-
+        var technician = await _technicianRepository.GetByIdAsync(id);
         return technician == null ? null : MapToResponse(technician);
     }
 
@@ -71,16 +73,15 @@ public class TechnicianService : ITechnicianService
             CreatedAt = DateTime.UtcNow
         };
 
-        _context.Technicians.Add(technician);
-        await _context.SaveChangesAsync();
+        await _technicianRepository.AddAsync(technician);
+        await _unitOfWork.SaveChangesAsync();
 
         return MapToResponse(technician);
     }
 
     public async Task<TechnicianResponse?> UpdateTechnicianAsync(Guid id, TechnicianUpdateRequest request)
     {
-        var technician = await _context.Technicians
-            .FirstOrDefaultAsync(t => t.Id == id);
+        var technician = await _technicianRepository.GetByIdAsync(id);
 
         if (technician == null)
         {
@@ -93,15 +94,15 @@ public class TechnicianService : ITechnicianService
         technician.Department = request.Department;
         technician.IsActive = request.IsActive; // Update IsActive status
 
-        await _context.SaveChangesAsync();
+        await _technicianRepository.UpdateAsync(technician);
+        await _unitOfWork.SaveChangesAsync();
 
         return MapToResponse(technician);
     }
 
     public async Task<bool> UpdateTechnicianStatusAsync(Guid id, bool isActive)
     {
-        var technician = await _context.Technicians
-            .FirstOrDefaultAsync(t => t.Id == id);
+        var technician = await _technicianRepository.GetByIdAsync(id);
 
         if (technician == null)
         {
@@ -109,16 +110,15 @@ public class TechnicianService : ITechnicianService
         }
 
         technician.IsActive = isActive;
-        await _context.SaveChangesAsync();
+        await _technicianRepository.UpdateAsync(technician);
+        await _unitOfWork.SaveChangesAsync();
 
         return true;
     }
 
     public async Task<bool> IsTechnicianActiveAsync(Guid id)
     {
-        var technician = await _context.Technicians
-            .FirstOrDefaultAsync(t => t.Id == id);
-
+        var technician = await _technicianRepository.GetByIdAsync(id);
         return technician != null && technician.IsActive;
     }
 
@@ -129,7 +129,7 @@ public class TechnicianService : ITechnicianService
     {
         _logger.LogInformation("LinkUser: Attempting to link Technician {TechnicianId} to User {UserId}", technicianId, userId);
 
-        var technician = await _context.Technicians.FirstOrDefaultAsync(t => t.Id == technicianId);
+        var technician = await _technicianRepository.GetByIdAsync(technicianId);
         if (technician == null)
         {
             _logger.LogWarning("LinkUser FAILED: Technician {TechnicianId} not found", technicianId);
@@ -144,12 +144,12 @@ public class TechnicianService : ITechnicianService
         }
 
         // Verify user exists and has Technician role
-        // Use AsNoTracking for read-only check, then re-query if needed
-        var user = await _context.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == userId);
+        var user = await _userRepository.GetByIdAsync(userId);
         if (user == null)
         {
             // Debug: Log all user IDs to help diagnose
-            var allUserIds = await _context.Users.AsNoTracking().Select(u => new { u.Id, u.Email, u.Role }).ToListAsync();
+            var allUsers = await _userRepository.GetAllAsync();
+            var allUserIds = allUsers.Select(u => new { u.Id, u.Email, u.Role }).ToList();
             _logger.LogWarning("LinkUser FAILED: User {UserId} not found. Total users in DB: {Count}. Users: {@Users}", 
                 userId, allUserIds.Count, allUserIds);
             return (LinkUserResult.UserNotFound, null);
@@ -163,7 +163,8 @@ public class TechnicianService : ITechnicianService
 
         // Link technician to user
         technician.UserId = userId;
-        await _context.SaveChangesAsync();
+        await _technicianRepository.UpdateAsync(technician);
+        await _unitOfWork.SaveChangesAsync();
 
         _logger.LogInformation("LinkUser SUCCESS: Technician {TechnicianId} linked to User {UserId} ({UserEmail})", 
             technicianId, userId, user.Email);
