@@ -211,3 +211,8 @@ dotnet run
 
 **Note:** This architecture documentation reflects the current state. For a detailed refactor plan, see `CLEAN_ARCH_REPORT.md`.
 
+
+
+
+
+

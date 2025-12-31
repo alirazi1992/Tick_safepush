@@ -33,6 +33,7 @@ import {
   Mail,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
+import { TICKET_STATUS_LABELS, type TicketStatus } from "@/lib/ticket-status"
 
 const statusColors: Record<TicketStatus, string> = {
   Submitted: "bg-blue-100 text-blue-800 border-blue-200",
