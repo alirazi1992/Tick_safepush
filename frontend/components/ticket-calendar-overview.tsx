@@ -109,7 +109,7 @@ const statusMeta: Record<
   },
 };
 
-import { TICKET_STATUS_LABELS } from "@/lib/ticket-status";
+import { TICKET_STATUS_LABELS, type TicketStatus } from "@/lib/ticket-status";
 
 const statusLabels = TICKET_STATUS_LABELS;
 
@@ -603,9 +603,9 @@ export function TicketCalendarOverview({
                     dateFormatter
                   );
                   const statusLabel =
-                    statusLabels[ticket.status] ?? ticket.status;
+                    statusLabels[ticket.status as TicketStatus] ?? ticket.status;
                   const statusClass =
-                    statusColors[ticket.status] ??
+                    statusColors[ticket.status as TicketStatus] ??
                     "bg-slate-100 text-slate-700 border";
                   const technicianName =
                     ticket.assignedTechnicianName || "Unassigned";

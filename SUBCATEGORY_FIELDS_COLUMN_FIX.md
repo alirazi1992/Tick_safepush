@@ -91,3 +91,8 @@ After applying the fix, verify the column exists:
 - The migration will still run normally for fresh databases
 - This is a safety net for databases that may have been created before the migration existed
 
+
+
+
+
+

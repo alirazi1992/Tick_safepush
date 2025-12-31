@@ -48,6 +48,7 @@ export function SubcategoryFieldDesignerDialog({
   const [saving, setSaving] = useState(false);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [deletingIndex, setDeletingIndex] = useState<number | null>(null);
+  const [showDevDiagnostics, setShowDevDiagnostics] = useState(false);
 
   // New field form state
   const [newField, setNewField] = useState<{
@@ -343,14 +344,34 @@ export function SubcategoryFieldDesignerDialog({
         {error && !loading && (
           <div className="border border-red-300 rounded-lg p-4 bg-red-50 mb-4">
             <p className="text-sm text-red-800 mb-2">{error}</p>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={loadFields}
-              className="text-red-700 border-red-300"
-            >
-              تلاش مجدد
-            </Button>
+            <div className="flex gap-2 items-center">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={loadFields}
+                className="text-red-700 border-red-300"
+              >
+                تلاش مجدد
+              </Button>
+              {process.env.NODE_ENV === "development" && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowDevDiagnostics(!showDevDiagnostics)}
+                  className="text-xs"
+                >
+                  {showDevDiagnostics ? "پنهان کردن" : "نمایش"} جزئیات فنی
+                </Button>
+              )}
+            </div>
+            {showDevDiagnostics && process.env.NODE_ENV === "development" && (
+              <details className="mt-2 text-xs">
+                <summary className="cursor-pointer text-red-700">جزئیات خطا (فقط برای توسعه)</summary>
+                <pre className="mt-2 p-2 bg-red-100 rounded text-xs overflow-auto max-h-40">
+                  {JSON.stringify({ error, subcategoryId }, null, 2)}
+                </pre>
+              </details>
+            )}
           </div>
         )}
 
