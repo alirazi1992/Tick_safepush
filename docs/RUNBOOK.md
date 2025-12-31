@@ -72,26 +72,67 @@ This will:
 
 ## Running the Application
 
-### Option 1: Using Helper Scripts (Recommended)
+### Option 1: Using Helper Scripts (Recommended for Windows)
 
-#### Backend
+#### Starting the Backend (Windows - Recommended)
+
+**Always use the helper script to prevent file-lock errors:**
 
 ```powershell
 # From project root
 .\tools\run-backend.ps1
 ```
 
-Or manually:
-```powershell
-cd backend\Ticketing.Backend
-dotnet run
-```
+This script:
+- ✅ Automatically stops any stale backend processes
+- ✅ Prevents MSB3027/MSB3021 file-lock errors
+- ✅ Handles port conflicts (falls back to 5001 if 5000 is in use)
+- ✅ Starts backend on `http://127.0.0.1:5000` (or 5001 if needed)
+- ✅ Shows Swagger URL in output
 
-The backend will:
-- Start on `http://localhost:5000` (HTTP) and `https://localhost:7000` (HTTPS)
+**The backend will:**
+- Start on `http://127.0.0.1:5000` (HTTP)
 - Automatically apply database migrations on startup
 - Seed default users (see [Default Users](#default-users))
 - Enable Swagger UI at `/swagger`
+
+#### Stopping the Backend
+
+**To stop the backend cleanly:**
+
+```powershell
+# From project root
+.\tools\stop-backend.ps1
+```
+
+This script:
+- ✅ Finds and stops processes on ports 5000 and 5001
+- ✅ Stops processes named `Ticketing.Backend` or `Ticketing.Api`
+- ✅ Stops dotnet processes running Ticketing DLLs
+- ✅ Only stops processes confirmed to be this backend (safety check)
+- ✅ Shuts down build server to release file locks
+- ✅ Prints what was stopped (PID + name)
+
+**Manual stop:** Press `Ctrl+C` in the terminal where backend is running.
+
+#### Important: Preventing File-Lock Errors on Windows
+
+**❌ DO NOT run `dotnet run` while another instance is running:**
+- This causes MSB3027/MSB3021 errors (file locked by another process)
+- The executable (`Ticketing.Backend.exe`) cannot be overwritten while running
+
+**✅ ALWAYS use the helper scripts:**
+- `.\tools\run-backend.ps1` - Automatically stops stale processes first
+- `.\tools\stop-backend.ps1` - Manually stop if needed
+
+**Manual start (not recommended on Windows):**
+```powershell
+cd backend\Ticketing.Backend
+# First, stop any running instances:
+..\..\tools\stop-backend.ps1
+# Then start:
+dotnet run
+```
 
 #### Frontend
 
@@ -252,12 +293,46 @@ curl -H "Authorization: Bearer $token" `
 
 **Solution:**
 ```powershell
-# Clean and rebuild
+# Use the helper script (recommended)
+.\tools\run-backend.ps1
+
+# Or manually:
 cd backend\Ticketing.Backend
+.\..\..\tools\stop-backend.ps1  # Stop any stale processes first
 dotnet clean
 dotnet build
 dotnet run
 ```
+
+#### MSB3027/MSB3021: File Locked by Another Process
+
+**Symptom:**
+```
+MSB3027: Unable to copy apphost.exe -> Ticketing.Backend.exe because it is being used by another process
+MSB3021: Unable to copy file because it is locked
+```
+
+**Cause:** A previous backend instance is still running, or `dotnet run` was executed while another instance was active.
+
+**Solution:**
+```powershell
+# Stop all backend processes
+.\tools\stop-backend.ps1
+
+# Then start fresh
+.\tools\run-backend.ps1
+```
+
+**Prevention:** Always use `.\tools\run-backend.ps1` instead of running `dotnet run` directly. The script automatically stops stale processes first.
+
+#### Project Structure Note
+
+**Important:** The project `backend/Ticketing.Backend/src/Ticketing.Api/Ticketing.Api.csproj` is a **library** (controllers only), not a runnable project. It does not have a `Program.cs` entry point.
+
+**The actual runnable project is:**
+- `backend/Ticketing.Backend/Ticketing.Backend.csproj` (root project)
+
+When you run `.\tools\run-backend.ps1`, it runs the root `Ticketing.Backend.csproj` project, which includes all controllers from the `Ticketing.Api` library.
 
 #### Port 5000 Already In Use
 
