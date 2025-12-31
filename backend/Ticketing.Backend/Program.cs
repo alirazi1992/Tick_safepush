@@ -248,6 +248,10 @@ builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.IUserPrefe
     Ticketing.Backend.Infrastructure.Data.Repositories.UserPreferencesRepository>();
 builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.INotificationRepository, 
     Ticketing.Backend.Infrastructure.Data.Repositories.NotificationRepository>();
+builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.ITechnicianRepository, 
+    Ticketing.Backend.Infrastructure.Data.Repositories.TechnicianRepository>();
+builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.IUserRepository, 
+    Ticketing.Backend.Infrastructure.Data.Repositories.UserRepository>();
 builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.IUnitOfWork, 
     Ticketing.Backend.Infrastructure.Data.Repositories.UnitOfWork>();
 
