@@ -1,8 +1,7 @@
-using Microsoft.EntityFrameworkCore;
 using Ticketing.Backend.Application.DTOs;
+using Ticketing.Backend.Application.Repositories;
 using Ticketing.Backend.Domain.Entities;
 using Ticketing.Backend.Domain.Enums;
-using Ticketing.Backend.Infrastructure.Data;
 
 namespace Ticketing.Backend.Application.Services;
 
@@ -28,20 +27,32 @@ public interface ITicketService
 
 public class TicketService : ITicketService
 {
-    private readonly AppDbContext _context;
+    private readonly ITicketRepository _ticketRepository;
+    private readonly ITicketMessageRepository _ticketMessageRepository;
+    private readonly ITechnicianRepository _technicianRepository;
+    private readonly IUserRepository _userRepository;
+    private readonly IUnitOfWork _unitOfWork;
     private readonly INotificationService _notificationService;
     private readonly ITechnicianService _technicianService;
     private readonly ISystemSettingsService _systemSettingsService;
     private readonly ISmartAssignmentService _smartAssignmentService;
 
     public TicketService(
-        AppDbContext context, 
+        ITicketRepository ticketRepository,
+        ITicketMessageRepository ticketMessageRepository,
+        ITechnicianRepository technicianRepository,
+        IUserRepository userRepository,
+        IUnitOfWork unitOfWork,
         INotificationService notificationService, 
         ITechnicianService technicianService,
         ISystemSettingsService systemSettingsService,
         ISmartAssignmentService smartAssignmentService)
     {
-        _context = context;
+        _ticketRepository = ticketRepository;
+        _ticketMessageRepository = ticketMessageRepository;
+        _technicianRepository = technicianRepository;
+        _userRepository = userRepository;
+        _unitOfWork = unitOfWork;
         _notificationService = notificationService;
         _technicianService = technicianService;
         _systemSettingsService = systemSettingsService;
@@ -50,57 +61,13 @@ public class TicketService : ITicketService
 
     public async Task<IEnumerable<TicketResponse>> GetTicketsAsync(Guid userId, UserRole role, TicketStatus? status, TicketPriority? priority, Guid? assignedTo, Guid? createdBy, string? search)
     {
-        // Start building a query with all the relationships we need for mapping
-        var query = _context.Tickets
-            .Include(t => t.Category)
-            .Include(t => t.Subcategory)
-            .Include(t => t.CreatedByUser)
-            .Include(t => t.AssignedToUser)
-            .Include(t => t.Technician)
-            .AsQueryable();
-
-        // Restrict tickets based on role
-        query = role switch
-        {
-            UserRole.Client => query.Where(t => t.CreatedByUserId == userId),
-            UserRole.Technician => query.Where(t => t.TechnicianId == userId || t.AssignedToUserId == userId),
-            _ => query
-        };
-
-        if (status.HasValue)
-        {
-            query = query.Where(t => t.Status == status.Value);
-        }
-        if (priority.HasValue)
-        {
-            query = query.Where(t => t.Priority == priority.Value);
-        }
-        if (assignedTo.HasValue)
-        {
-            query = query.Where(t => t.AssignedToUserId == assignedTo.Value);
-        }
-        if (createdBy.HasValue)
-        {
-            query = query.Where(t => t.CreatedByUserId == createdBy.Value);
-        }
-        if (!string.IsNullOrWhiteSpace(search))
-        {
-            query = query.Where(t => t.Title.Contains(search) || t.Description.Contains(search));
-        }
-
-        var tickets = await query.OrderByDescending(t => t.CreatedAt).ToListAsync();
+        var tickets = await _ticketRepository.QueryAsync(role, userId, status, priority, assignedTo, createdBy, search);
         return tickets.Select(MapToResponse);
     }
 
     public async Task<TicketResponse?> GetTicketAsync(Guid id, Guid userId, UserRole role)
     {
-        var ticket = await _context.Tickets
-            .Include(t => t.Category)
-            .Include(t => t.Subcategory)
-            .Include(t => t.CreatedByUser)
-            .Include(t => t.AssignedToUser)
-            .Include(t => t.Technician)
-            .FirstOrDefaultAsync(t => t.Id == id);
+        var ticket = await _ticketRepository.GetByIdWithIncludesAsync(id);
 
         if (ticket == null)
         {
@@ -124,7 +91,8 @@ public class TicketService : ITicketService
         {
             ticket.Status = TicketStatus.Viewed;
             ticket.UpdatedAt = DateTime.UtcNow;
-            await _context.SaveChangesAsync();
+            await _ticketRepository.UpdateAsync(ticket);
+            await _unitOfWork.SaveChangesAsync();
         }
 
         return MapToResponse(ticket);
@@ -146,28 +114,26 @@ public class TicketService : ITicketService
             CreatedAt = DateTime.UtcNow
         };
 
-        _context.Tickets.Add(ticket);
-        await _context.SaveChangesAsync();
+        await _ticketRepository.AddAsync(ticket);
+        await _unitOfWork.SaveChangesAsync();
 
         // NOTE: Auto-assignment on ticket creation is DISABLED by design.
         // Tickets are always created as Submitted + unassigned.
         // Smart Assignment runs manually via POST /api/admin/assignment/smart/run
         // or can be scheduled externally. This ensures predictable ticket state.
 
-        ticket = await _context.Tickets
-            .Include(t => t.Category)
-            .Include(t => t.Subcategory)
-            .Include(t => t.CreatedByUser)
-            .Include(t => t.AssignedToUser)
-            .Include(t => t.Technician)
-            .FirstAsync(t => t.Id == ticket.Id);
+        ticket = await _ticketRepository.GetByIdWithIncludesAsync(ticket.Id);
+        if (ticket == null)
+        {
+            return null;
+        }
 
         return MapToResponse(ticket);
     }
 
     public async Task<TicketResponse?> UpdateTicketAsync(Guid id, Guid userId, UserRole role, TicketUpdateRequest request)
     {
-        var ticket = await _context.Tickets.FirstOrDefaultAsync(t => t.Id == id);
+        var ticket = await _ticketRepository.GetByIdAsync(id);
         if (ticket == null)
         {
             return null;
@@ -229,22 +195,22 @@ public class TicketService : ITicketService
         }
 
         ticket.UpdatedAt = DateTime.UtcNow;
-        await _context.SaveChangesAsync();
+        await _ticketRepository.UpdateAsync(ticket);
+        await _unitOfWork.SaveChangesAsync();
 
         return await GetTicketAsync(id, userId, role);
     }
 
     public async Task<TicketResponse?> AssignTicketAsync(Guid id, Guid technicianId)
     {
-        var ticket = await _context.Tickets.FirstOrDefaultAsync(t => t.Id == id);
+        var ticket = await _ticketRepository.GetByIdAsync(id);
         if (ticket == null)
         {
             return null;
         }
 
         // Load technician to get UserId (required for AssignedToUserId foreign key)
-        var technician = await _context.Technicians
-            .FirstOrDefaultAsync(t => t.Id == technicianId);
+        var technician = await _technicianRepository.GetByIdAsync(technicianId);
         
         if (technician == null || !technician.IsActive)
         {
@@ -257,7 +223,8 @@ public class TicketService : ITicketService
         // When assigning, set status to Open (not InProgress) - technician will change to InProgress when they start working
         ticket.Status = TicketStatus.Open;
         ticket.UpdatedAt = DateTime.UtcNow;
-        await _context.SaveChangesAsync();
+        await _ticketRepository.UpdateAsync(ticket);
+        await _unitOfWork.SaveChangesAsync();
 
         return await GetTicketAsync(id, Guid.Empty, UserRole.Admin);
     }
@@ -270,32 +237,28 @@ public class TicketService : ITicketService
             return Enumerable.Empty<TicketMessageDto>();
         }
 
-        return await _context.TicketMessages
-            .Include(m => m.AuthorUser)
-            .Where(m => m.TicketId == ticketId)
-            .OrderBy(m => m.CreatedAt)
-            .Select(m => new TicketMessageDto
-            {
-                Id = m.Id,
-                AuthorUserId = m.AuthorUserId,
-                AuthorName = m.AuthorUser!.FullName,
-                AuthorEmail = m.AuthorUser.Email,
-                Message = m.Message,
-                CreatedAt = m.CreatedAt,
-                Status = m.Status
-            })
-            .ToListAsync();
+        var messages = await _ticketMessageRepository.GetByTicketIdAsync(ticketId);
+        return messages.Select(m => new TicketMessageDto
+        {
+            Id = m.Id,
+            AuthorUserId = m.AuthorUserId,
+            AuthorName = m.AuthorUser!.FullName,
+            AuthorEmail = m.AuthorUser.Email,
+            Message = m.Message,
+            CreatedAt = m.CreatedAt,
+            Status = m.Status
+        });
     }
 
     public async Task<TicketMessageDto?> AddMessageAsync(Guid ticketId, Guid authorId, string message, TicketStatus? status = null)
     {
-        var ticket = await _context.Tickets.FirstOrDefaultAsync(t => t.Id == ticketId);
+        var ticket = await _ticketRepository.GetByIdAsync(ticketId);
         if (ticket == null)
         {
             return null;
         }
 
-        var author = await _context.Users.FirstOrDefaultAsync(u => u.Id == authorId);
+        var author = await _userRepository.GetByIdAsync(authorId);
         if (author == null)
         {
             return null;
@@ -360,6 +323,7 @@ public class TicketService : ITicketService
         }
 
         ticket.UpdatedAt = DateTime.UtcNow;
+        await _ticketRepository.UpdateAsync(ticket);
 
         var ticketMessage = new TicketMessage
         {
@@ -371,27 +335,29 @@ public class TicketService : ITicketService
             Status = status ?? ticket.Status
         };
 
-        _context.TicketMessages.Add(ticketMessage);
-        await _context.SaveChangesAsync();
+        await _ticketMessageRepository.AddAsync(ticketMessage);
+        await _unitOfWork.SaveChangesAsync();
 
         // Notify opposite participant
         var notifyUserId = ticket.AssignedToUserId == authorId ? ticket.CreatedByUserId : ticket.AssignedToUserId ?? ticket.CreatedByUserId;
         await _notificationService.CreateNotificationAsync(notifyUserId, $"New message on ticket '{ticket.Title}'");
 
-        return await _context.TicketMessages
-            .Include(m => m.AuthorUser)
-            .Where(m => m.Id == ticketMessage.Id)
-            .Select(m => new TicketMessageDto
-            {
-                Id = m.Id,
-                AuthorUserId = m.AuthorUserId,
-                AuthorName = m.AuthorUser!.FullName,
-                AuthorEmail = m.AuthorUser.Email,
-                Message = m.Message,
-                CreatedAt = m.CreatedAt,
-                Status = m.Status
-            })
-            .FirstAsync();
+        var createdMessage = await _ticketMessageRepository.GetByIdWithAuthorAsync(ticketMessage.Id);
+        if (createdMessage == null)
+        {
+            return null;
+        }
+
+        return new TicketMessageDto
+        {
+            Id = createdMessage.Id,
+            AuthorUserId = createdMessage.AuthorUserId,
+            AuthorName = createdMessage.AuthorUser!.FullName,
+            AuthorEmail = createdMessage.AuthorUser.Email,
+            Message = createdMessage.Message,
+            CreatedAt = createdMessage.CreatedAt,
+            Status = createdMessage.Status
+        };
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════
@@ -437,13 +403,7 @@ public class TicketService : ITicketService
     public async Task<IEnumerable<TicketCalendarResponse>> GetCalendarTicketsAsync(DateTime startDate, DateTime endDate)
     {
         // Get all tickets within the date range (Admin only - no role filtering)
-        var tickets = await _context.Tickets
-            .Include(t => t.Category)
-            .Include(t => t.AssignedToUser)
-            .Include(t => t.Technician)
-            .Where(t => t.CreatedAt >= startDate && t.CreatedAt <= endDate)
-            .OrderBy(t => t.CreatedAt)
-            .ToListAsync();
+        var tickets = await _ticketRepository.GetCalendarTicketsAsync(startDate, endDate);
 
         return tickets.Select(t => new TicketCalendarResponse
         {

@@ -254,6 +254,8 @@ builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.IUserRepos
     Ticketing.Backend.Infrastructure.Data.Repositories.UserRepository>();
 builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.ITicketRepository, 
     Ticketing.Backend.Infrastructure.Data.Repositories.TicketRepository>();
+builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.ITicketMessageRepository, 
+    Ticketing.Backend.Infrastructure.Data.Repositories.TicketMessageRepository>();
 builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.IUnitOfWork, 
     Ticketing.Backend.Infrastructure.Data.Repositories.UnitOfWork>();
 

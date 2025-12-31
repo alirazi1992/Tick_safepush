@@ -21,6 +21,77 @@ public class TicketRepository : ITicketRepository
             .FirstOrDefaultAsync(t => t.Id == id);
     }
 
+    public async Task<Ticket?> GetByIdWithIncludesAsync(Guid id)
+    {
+        return await _context.Tickets
+            .Include(t => t.Category)
+            .Include(t => t.Subcategory)
+            .Include(t => t.CreatedByUser)
+            .Include(t => t.AssignedToUser)
+            .Include(t => t.Technician)
+            .FirstOrDefaultAsync(t => t.Id == id);
+    }
+
+    public async Task<IEnumerable<Ticket>> QueryAsync(
+        UserRole role,
+        Guid userId,
+        TicketStatus? status = null,
+        TicketPriority? priority = null,
+        Guid? assignedTo = null,
+        Guid? createdBy = null,
+        string? search = null)
+    {
+        var query = _context.Tickets
+            .Include(t => t.Category)
+            .Include(t => t.Subcategory)
+            .Include(t => t.CreatedByUser)
+            .Include(t => t.AssignedToUser)
+            .Include(t => t.Technician)
+            .AsQueryable();
+
+        // Restrict tickets based on role
+        query = role switch
+        {
+            UserRole.Client => query.Where(t => t.CreatedByUserId == userId),
+            UserRole.Technician => query.Where(t => t.TechnicianId == userId || t.AssignedToUserId == userId),
+            _ => query
+        };
+
+        if (status.HasValue)
+        {
+            query = query.Where(t => t.Status == status.Value);
+        }
+        if (priority.HasValue)
+        {
+            query = query.Where(t => t.Priority == priority.Value);
+        }
+        if (assignedTo.HasValue)
+        {
+            query = query.Where(t => t.AssignedToUserId == assignedTo.Value);
+        }
+        if (createdBy.HasValue)
+        {
+            query = query.Where(t => t.CreatedByUserId == createdBy.Value);
+        }
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            query = query.Where(t => t.Title.Contains(search) || t.Description.Contains(search));
+        }
+
+        return await query.OrderByDescending(t => t.CreatedAt).ToListAsync();
+    }
+
+    public async Task<IEnumerable<Ticket>> GetCalendarTicketsAsync(DateTime startDate, DateTime endDate)
+    {
+        return await _context.Tickets
+            .Include(t => t.Category)
+            .Include(t => t.AssignedToUser)
+            .Include(t => t.Technician)
+            .Where(t => t.CreatedAt >= startDate && t.CreatedAt <= endDate)
+            .OrderBy(t => t.CreatedAt)
+            .ToListAsync();
+    }
+
     public async Task<int> CountByTechnicianIdAndStatusAsync(Guid technicianId, IEnumerable<TicketStatus> statuses)
     {
         return await _context.Tickets
@@ -60,4 +131,3 @@ public class TicketRepository : ITicketRepository
         return Task.CompletedTask;
     }
 }
-
