@@ -242,6 +242,10 @@ builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.IFieldDefi
     Ticketing.Backend.Infrastructure.Data.Repositories.FieldDefinitionRepository>();
 builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.ICategoryRepository, 
     Ticketing.Backend.Infrastructure.Data.Repositories.CategoryRepository>();
+builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.ISystemSettingsRepository, 
+    Ticketing.Backend.Infrastructure.Data.Repositories.SystemSettingsRepository>();
+builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.IUserPreferencesRepository, 
+    Ticketing.Backend.Infrastructure.Data.Repositories.UserPreferencesRepository>();
 builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.IUnitOfWork, 
     Ticketing.Backend.Infrastructure.Data.Repositories.UnitOfWork>();
 
