@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using Ticketing.Application.DTOs;
 using Ticketing.Application.Exceptions;
 using Ticketing.Application.Services;
