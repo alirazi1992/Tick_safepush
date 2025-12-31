@@ -19,9 +19,31 @@ public class CategoryRepository : ICategoryRepository
         return await _context.Categories.FindAsync(id);
     }
 
+    public async Task<Category?> GetByIdWithSubcategoriesAsync(int id)
+    {
+        return await _context.Categories
+            .Include(c => c.Subcategories)
+            .FirstOrDefaultAsync(c => c.Id == id);
+    }
+
+    public async Task<Category?> GetByIdWithTicketsAndSubcategoriesAsync(int id)
+    {
+        return await _context.Categories
+            .Include(c => c.Tickets)
+            .Include(c => c.Subcategories)
+            .FirstOrDefaultAsync(c => c.Id == id);
+    }
+
     public async Task<Subcategory?> GetSubcategoryByIdAsync(int id)
     {
         return await _context.Subcategories.FindAsync(id);
+    }
+
+    public async Task<Subcategory?> GetSubcategoryByIdWithTicketsAsync(int id)
+    {
+        return await _context.Subcategories
+            .Include(s => s.Tickets)
+            .FirstOrDefaultAsync(s => s.Id == id);
     }
 
     public async Task<IEnumerable<Category>> GetAllAsync()
@@ -29,6 +51,118 @@ public class CategoryRepository : ICategoryRepository
         return await _context.Categories
             .Include(c => c.Subcategories)
             .ToListAsync();
+    }
+
+    public async Task<IEnumerable<Category>> GetActiveCategoriesAsync()
+    {
+        return await _context.Categories
+            .Include(c => c.Subcategories)
+            .Where(c => c.IsActive)
+            .ToListAsync();
+    }
+
+    public async Task<IEnumerable<Category>> SearchAsync(string? search, int skip, int take)
+    {
+        var query = _context.Categories.Include(c => c.Subcategories).AsQueryable();
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            query = query.Where(c => c.Name.Contains(search) || (c.Description != null && c.Description.Contains(search)));
+        }
+
+        return await query
+            .OrderBy(c => c.Name)
+            .Skip(skip)
+            .Take(take)
+            .ToListAsync();
+    }
+
+    public async Task<int> CountAsync(string? search = null)
+    {
+        var query = _context.Categories.AsQueryable();
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            query = query.Where(c => c.Name.Contains(search) || (c.Description != null && c.Description.Contains(search)));
+        }
+
+        return await query.CountAsync();
+    }
+
+    public async Task<bool> ExistsByNameAsync(string name)
+    {
+        return await _context.Categories.AnyAsync(c => c.Name == name);
+    }
+
+    public async Task<bool> ExistsByNameExcludingIdAsync(string name, int excludeId)
+    {
+        return await _context.Categories.AnyAsync(c => c.Name == name && c.Id != excludeId);
+    }
+
+    public async Task<bool> SubcategoryExistsByNameAsync(int categoryId, string name)
+    {
+        return await _context.Subcategories.AnyAsync(s => s.CategoryId == categoryId && s.Name == name);
+    }
+
+    public async Task<bool> SubcategoryExistsByNameExcludingIdAsync(int categoryId, string name, int excludeId)
+    {
+        return await _context.Subcategories.AnyAsync(s => s.CategoryId == categoryId && s.Name == name && s.Id != excludeId);
+    }
+
+    public async Task<IEnumerable<Subcategory>> GetSubcategoriesByCategoryIdAsync(int categoryId)
+    {
+        return await _context.Subcategories
+            .Where(s => s.CategoryId == categoryId)
+            .OrderBy(s => s.Name)
+            .ToListAsync();
+    }
+
+    public async Task<Category> AddAsync(Category category)
+    {
+        await _context.Categories.AddAsync(category);
+        return category;
+    }
+
+    public async Task<Subcategory> AddSubcategoryAsync(Subcategory subcategory)
+    {
+        await _context.Subcategories.AddAsync(subcategory);
+        return subcategory;
+    }
+
+    public Task UpdateAsync(Category category)
+    {
+        _context.Categories.Update(category);
+        return Task.CompletedTask;
+    }
+
+    public Task UpdateSubcategoryAsync(Subcategory subcategory)
+    {
+        _context.Subcategories.Update(subcategory);
+        return Task.CompletedTask;
+    }
+
+    public async Task<bool> DeleteAsync(int id)
+    {
+        var category = await GetByIdWithTicketsAndSubcategoriesAsync(id);
+        if (category == null)
+        {
+            return false;
+        }
+
+        _context.Categories.Remove(category);
+        return true;
+    }
+
+    public async Task<bool> DeleteSubcategoryAsync(int id)
+    {
+        var subcategory = await GetSubcategoryByIdWithTicketsAsync(id);
+        if (subcategory == null)
+        {
+            return false;
+        }
+
+        _context.Subcategories.Remove(subcategory);
+        return true;
     }
 }
 
