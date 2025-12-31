@@ -21,6 +21,14 @@ public class TechnicianRepository : ITechnicianRepository
             .ToListAsync();
     }
 
+    public async Task<IEnumerable<Technician>> GetActiveWithUserIdAsync()
+    {
+        return await _context.Technicians
+            .Where(t => t.IsActive && t.UserId != null)
+            .OrderBy(t => t.FullName)
+            .ToListAsync();
+    }
+
     public async Task<Technician?> GetByIdAsync(Guid id)
     {
         return await _context.Technicians

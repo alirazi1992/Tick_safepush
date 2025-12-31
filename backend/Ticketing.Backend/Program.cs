@@ -252,6 +252,8 @@ builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.ITechnicia
     Ticketing.Backend.Infrastructure.Data.Repositories.TechnicianRepository>();
 builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.IUserRepository, 
     Ticketing.Backend.Infrastructure.Data.Repositories.UserRepository>();
+builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.ITicketRepository, 
+    Ticketing.Backend.Infrastructure.Data.Repositories.TicketRepository>();
 builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.IUnitOfWork, 
     Ticketing.Backend.Infrastructure.Data.Repositories.UnitOfWork>();
 
