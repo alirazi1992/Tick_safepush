@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { getApiBaseUrl } from "@/lib/api-client"
+import { safeFetchBackend } from "@/lib/safe-fetch-backend"
 
 /**
  * Dev-only component to show API connection status
@@ -47,10 +48,8 @@ export function ApiStatusDebug() {
           const controller = new AbortController()
           const timeoutId = setTimeout(() => controller.abort(), 5000)
           
-          const response = await fetch(`${base}/api/health`, {
+          const response = await safeFetchBackend(`${base}/api/health`, {
             signal: controller.signal,
-            cache: 'no-store',
-            credentials: "include",
           })
           clearTimeout(timeoutId)
           

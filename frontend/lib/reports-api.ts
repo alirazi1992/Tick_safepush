@@ -3,6 +3,7 @@
  */
 
 import { apiRequest, getApiBaseUrl } from "./api-client";
+import { safeFetchBackend } from "./safe-fetch-backend";
 import { joinApi } from "./url";
 
 // Technician Work Report (JSON)
@@ -99,12 +100,11 @@ export async function downloadTechnicianWorkReportExcel(
   const baseUrl = await getApiBaseUrl();
   const url = joinApi(baseUrl, `/api/admin/reports/technician-work?${params.toString()}`);
 
-  const response = await fetch(url, {
+  const response = await safeFetchBackend(url, {
     method: "GET",
     headers: {
       Authorization: `Bearer ${token}`,
     },
-    credentials: "include",
   });
 
   if (!response.ok) {
@@ -166,12 +166,11 @@ export async function downloadReport(options: DownloadReportOptions): Promise<vo
   const baseUrl = await getApiBaseUrl();
   const url = joinApi(baseUrl, `/api/admin/reports/${path}?${queryParams}`);
 
-  const response = await fetch(url, {
+  const response = await safeFetchBackend(url, {
     method: "GET",
     headers: {
       Authorization: `Bearer ${token}`,
     },
-    credentials: "include",
   });
 
   if (!response.ok) {
@@ -245,7 +244,6 @@ function downloadBlob(blob: Blob, fileName: string): void {
   document.body.removeChild(link);
   window.URL.revokeObjectURL(url);
 }
-
 
 
 

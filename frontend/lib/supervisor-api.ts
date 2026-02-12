@@ -1,4 +1,5 @@
 import { apiRequest } from "./api-client"
+import { safeFetchBackend } from "./safe-fetch-backend"
 import type {
   ApiSupervisorTechnicianWorkloadDto,
   ApiSupervisorTechnicianSummaryDto,
@@ -107,13 +108,12 @@ export async function getSupervisorTechnicianReport(
   const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:5000";
   const url = `${baseUrl}/api/supervisor/technicians/${technicianUserId}/report?format=csv`;
   
-  const response = await fetch(url, {
+  const response = await safeFetchBackend(url, {
     method: "GET",
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
-    credentials: "include",
   });
 
   if (!response.ok) {
