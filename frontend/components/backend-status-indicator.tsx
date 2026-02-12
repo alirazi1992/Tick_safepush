@@ -36,6 +36,7 @@ export function BackendStatusIndicator() {
           const response = await fetch(`${baseUrl}/api/health`, {
             signal: controller.signal,
             cache: 'no-store',
+            credentials: "include",
           })
           clearTimeout(timeoutId)
           
@@ -153,7 +154,6 @@ export function BackendStatusIndicator() {
   // Show nothing when backend is OK
   return null
 }
-
 
 
 

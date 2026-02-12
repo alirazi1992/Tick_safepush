@@ -104,6 +104,7 @@ export async function downloadTechnicianWorkReportExcel(
     headers: {
       Authorization: `Bearer ${token}`,
     },
+    credentials: "include",
   });
 
   if (!response.ok) {
@@ -170,6 +171,7 @@ export async function downloadReport(options: DownloadReportOptions): Promise<vo
     headers: {
       Authorization: `Bearer ${token}`,
     },
+    credentials: "include",
   });
 
   if (!response.ok) {
@@ -243,7 +245,6 @@ function downloadBlob(blob: Blob, fileName: string): void {
   document.body.removeChild(link);
   window.URL.revokeObjectURL(url);
 }
-
 
 
 

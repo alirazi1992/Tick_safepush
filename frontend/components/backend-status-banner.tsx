@@ -51,6 +51,7 @@ export function BackendStatusBanner() {
         method: "GET",
         signal: controller.signal,
         cache: "no-store",
+        credentials: "include",
       });
 
       clearTimeout(timeoutId);

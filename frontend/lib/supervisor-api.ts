@@ -113,6 +113,7 @@ export async function getSupervisorTechnicianReport(
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
+    credentials: "include",
   });
 
   if (!response.ok) {

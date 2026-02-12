@@ -50,6 +50,7 @@ export function ApiStatusDebug() {
           const response = await fetch(`${base}/api/health`, {
             signal: controller.signal,
             cache: 'no-store',
+            credentials: "include",
           })
           clearTimeout(timeoutId)
           
