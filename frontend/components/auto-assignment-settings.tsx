@@ -283,7 +283,7 @@ export function AutoAssignmentSettings({ onSettingsChange }: AutoAssignmentSetti
 
       {/* Edit Rule Dialog */}
       <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
-        <DialogContent className="max-w-2xl" dir="rtl">
+        <DialogContent className="max-h-[85vh] overflow-y-auto w-[95vw] sm:w-[90vw] md:max-w-2xl" dir="rtl">
           <DialogHeader>
             <DialogTitle className="text-right">ویرایش قانون تعیین خودکار</DialogTitle>
           </DialogHeader>

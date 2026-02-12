@@ -12,6 +12,7 @@ export type FieldType =
   | "date"
   | "datetime"
   | "select"
+  | "multiselect"
   | "radio"
   | "checkbox"
   | "file"
@@ -42,5 +43,5 @@ export function parseOptions(input: string): FieldOption[] {
 }
 
 export function isChoice(type: FieldType): boolean {
-  return type === "select" || type === "radio"
+  return type === "select" || type === "multiselect" || type === "radio"
 }

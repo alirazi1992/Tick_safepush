@@ -17,6 +17,5 @@ public class User
     public ICollection<Ticket> TicketsCreated { get; set; } = new List<Ticket>();
     public ICollection<Ticket> TicketsAssigned { get; set; } = new List<Ticket>();
     public ICollection<TicketMessage> Messages { get; set; } = new List<TicketMessage>();
-    public ICollection<Notification> Notifications { get; set; } = new List<Notification>();
     public UserPreferences? Preferences { get; set; }
 }

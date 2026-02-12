@@ -32,6 +32,7 @@ public class TicketRepository : ITicketRepository
                 .ThenInclude(tt => tt.Technician)
             .Include(t => t.FieldValues)
                 .ThenInclude(fv => fv.FieldDefinition)
+            .Include(t => t.Attachments)
             .FirstOrDefaultAsync(t => t.Id == id);
     }
 
@@ -54,6 +55,7 @@ public class TicketRepository : ITicketRepository
                 .ThenInclude(tt => tt.Technician)
             .Include(t => t.FieldValues)
                 .ThenInclude(fv => fv.FieldDefinition)
+            .Include(t => t.Attachments)
             .AsQueryable();
 
         // Restrict tickets based on role
@@ -64,7 +66,7 @@ public class TicketRepository : ITicketRepository
                 t.AssignedToUserId == userId ||
                 t.AssignedTechnicians.Any(tt => tt.TechnicianUserId == userId)
             ),
-            _ => query
+            _ => query // Admin sees all tickets
         };
 
         if (status.HasValue)
@@ -103,13 +105,19 @@ public class TicketRepository : ITicketRepository
 
     public async Task<IEnumerable<Ticket>> GetCalendarTicketsAsync(DateTime startDate, DateTime endDate)
     {
+        // Include all tickets within date range (Admin only - no role filtering)
+        // This ensures newly created tickets appear in admin calendar immediately
         return await _context.Tickets
-            .Where(t => t.DueDate.HasValue && t.DueDate >= startDate && t.DueDate <= endDate)
+            .Where(t => t.CreatedAt >= startDate && t.CreatedAt <= endDate)
             .Include(t => t.Category)
             .Include(t => t.Subcategory)
             .Include(t => t.CreatedByUser)
             .Include(t => t.AssignedToUser)
-            .OrderBy(t => t.DueDate)
+            .Include(t => t.Technician)
+            .Include(t => t.AssignedTechnicians)
+                .ThenInclude(tt => tt.Technician)
+            .Include(t => t.Attachments)
+            .OrderByDescending(t => t.CreatedAt)
             .ToListAsync();
     }
 
@@ -118,8 +126,7 @@ public class TicketRepository : ITicketRepository
         return await _context.Tickets
             .CountAsync(t => t.AssignedToUserId == null && 
                            !t.AssignedTechnicians.Any() &&
-                           t.Status != TicketStatus.Closed &&
-                           t.Status != TicketStatus.Resolved);
+                           t.Status != TicketStatus.Solved);
     }
 
     public async Task<Ticket?> GetBasicByIdAsync(Guid id)
@@ -130,4 +137,3 @@ public class TicketRepository : ITicketRepository
             .FirstOrDefaultAsync(t => t.Id == id);
     }
 }
-

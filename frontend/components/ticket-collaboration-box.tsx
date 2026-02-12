@@ -22,6 +22,7 @@ import { getStatusLabel, getStatusColor } from "@/lib/ticket-status"
 import type { ApiTicketCollaborationResponse, ApiUpdateWorkSessionRequest } from "@/lib/api-types"
 import { toast } from "@/hooks/use-toast"
 import { useSignalR } from "@/hooks/use-signalr"
+import { parseServerDate } from "@/lib/datetime"
 
 const stateLabels: Record<string, string> = {
   Idle: "بیکار",
@@ -43,8 +44,11 @@ interface TicketCollaborationBoxProps {
   ticketId: string
 }
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/+$/, "") || "http://localhost:5000"
-const SIGNALR_HUB_URL = `${API_BASE_URL}/notificationHub`
+import { normalizeBaseUrl, joinApi } from "@/lib/url";
+
+const API_BASE_URL = normalizeBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL) || "http://localhost:5000"
+// PHASE 3: Use correct SignalR hub URL (matches backend TicketHub at /hubs/tickets)
+const SIGNALR_HUB_URL = joinApi(API_BASE_URL, "/hubs/tickets")
 
 export function TicketCollaborationBox({ ticketId }: TicketCollaborationBoxProps) {
   const { token, user } = useAuth()
@@ -66,31 +70,43 @@ export function TicketCollaborationBox({ ticketId }: TicketCollaborationBoxProps
   useEffect(() => {
     if (!token) return
 
-    // Join ticket group when SignalR is connected
+    // PHASE 3: Subscribe to ticket updates when SignalR is connected
+    // Uses backend method names: SubscribeToTicket/UnsubscribeFromTicket
     if (connected && connection && invoke) {
-      invoke("JoinTicketGroup", ticketId).catch((err) => {
-        console.error("Failed to join ticket group:", err)
+      invoke("SubscribeToTicket", ticketId).catch((err) => {
+        console.error("Failed to subscribe to ticket:", err)
       })
     }
 
-    // Subscribe to collaboration updates
-    const unsubscribe = on?.("ticket:collaborationUpdated", (data: ApiTicketCollaborationResponse) => {
+    // PHASE 3: Listen for real-time ticket updates (TicketUpdated event from backend)
+    const unsubscribeUpdated = on?.("TicketUpdated", (data: { ticketId: string; updateType: string; metadata?: any }) => {
       if (data.ticketId === ticketId) {
-        setCollaboration(data)
+        // Refresh collaboration data when ticket is updated
+        loadCollaboration()
         lastUpdateRef.current = new Date().toISOString()
-        // Show toast for updates from other technicians
-        if (data.lastActivity && data.lastActivity.actorUserId !== user?.id) {
+        // Show toast for updates
+        if (data.metadata?.authorName && data.metadata?.authorName !== user?.fullName) {
           toast({
-            title: "بروزرسانی همکاری",
-            description: `تکنسین ${data.lastActivity.actorName} وضعیت را بروزرسانی کرد`,
+            title: "بروزرسانی تیکت",
+            description: data.updateType === "ReplyAdded" 
+              ? `${data.metadata.authorName} پاسخی اضافه کرد`
+              : `${data.metadata.authorName} وضعیت را بروزرسانی کرد`,
           })
         }
       }
     })
 
+    // Also listen for status changes
+    const unsubscribeStatus = on?.("TicketStatusUpdated", (data: { ticketId: string; newStatus: string; actorRole: string }) => {
+      if (data.ticketId === ticketId) {
+        loadCollaboration()
+        lastUpdateRef.current = new Date().toISOString()
+      }
+    })
+
     loadCollaboration()
 
-    // Setup polling as fallback (every 15 seconds)
+    // Setup polling as fallback (every 15 seconds) when SignalR is disconnected
     pollIntervalRef.current = setInterval(() => {
       if (!connected) {
         loadCollaboration()
@@ -108,12 +124,14 @@ export function TicketCollaborationBox({ ticketId }: TicketCollaborationBoxProps
         clearInterval(pollIntervalRef.current)
       }
       window.removeEventListener("focus", handleFocus)
+      // Unsubscribe from ticket when leaving
       if (connected && connection && invoke) {
-        invoke("LeaveTicketGroup", ticketId).catch(() => {})
+        invoke("UnsubscribeFromTicket", ticketId).catch(() => {})
       }
-      unsubscribe?.()
+      unsubscribeUpdated?.()
+      unsubscribeStatus?.()
     }
-  }, [token, ticketId, connected, connection, user?.id])
+  }, [token, ticketId, connected, connection, user?.id, user?.fullName])
 
   const loadCollaboration = async () => {
     if (!token) return
@@ -161,7 +179,8 @@ export function TicketCollaborationBox({ ticketId }: TicketCollaborationBoxProps
   }
 
   const formatRelativeTime = (dateString: string) => {
-    const date = new Date(dateString)
+    const date = parseServerDate(dateString)
+    if (!date) return "—"
     const now = new Date()
     const diffMs = now.getTime() - date.getTime()
     const diffMins = Math.floor(diffMs / 60000)

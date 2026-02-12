@@ -26,17 +26,20 @@ public interface IUserService
 public class UserService : IUserService
 {
     private readonly IUserRepository _userRepository;
+    private readonly ITechnicianRepository _technicianRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly IJwtTokenGenerator _jwtTokenGenerator;
     private readonly IPasswordHasher<User> _passwordHasher;
 
     public UserService(
         IUserRepository userRepository,
+        ITechnicianRepository technicianRepository,
         IUnitOfWork unitOfWork,
         IJwtTokenGenerator jwtTokenGenerator,
         IPasswordHasher<User> passwordHasher)
     {
         _userRepository = userRepository;
+        _technicianRepository = technicianRepository;
         _unitOfWork = unitOfWork;
         _jwtTokenGenerator = jwtTokenGenerator;
         _passwordHasher = passwordHasher;
@@ -137,10 +140,11 @@ public class UserService : IUserService
 
         // 6) SECURITY: Generate JWT token with role claim from persisted user.Role
         // Token generation uses user.Role (which equals request.Role) - no hardcoding
+        var userDto = await MapToDtoAsync(user);
         return new AuthResponse
         {
-            Token = _jwtTokenGenerator.GenerateToken(user),
-            User = MapToDto(user)
+            Token = _jwtTokenGenerator.GenerateToken(user, userDto.IsSupervisor),
+            User = userDto
         };
     }
 
@@ -155,35 +159,52 @@ public class UserService : IUserService
             return null;
         }
 
+        // Check if user is locked out (e.g., soft-deleted technician)
+        if (user.LockoutEnabled && user.LockoutEnd.HasValue && user.LockoutEnd > DateTimeOffset.UtcNow)
+        {
+            return null; // Account is locked out
+        }
+
         var verifyResult = _passwordHasher.VerifyHashedPassword(user, user.PasswordHash, request.Password);
         if (verifyResult == PasswordVerificationResult.Failed)
         {
             return null;
         }
 
+        var userDto = await MapToDtoAsync(user);
         return new AuthResponse
         {
-            Token = _jwtTokenGenerator.GenerateToken(user),
-            User = MapToDto(user)
+            Token = _jwtTokenGenerator.GenerateToken(user, userDto.IsSupervisor),
+            User = userDto
         };
     }
 
     public async Task<UserDto?> GetByIdAsync(Guid id)
     {
         var user = await _userRepository.GetByIdAsync(id);
-        return user == null ? null : MapToDto(user);
+        return user == null ? null : await MapToDtoAsync(user);
     }
 
     public async Task<IEnumerable<UserDto>> GetAllAsync()
     {
         var users = await _userRepository.GetAllAsync();
-        return users.Select(MapToDto);
+        var results = new List<UserDto>();
+        foreach (var user in users)
+        {
+            results.Add(await MapToDtoAsync(user));
+        }
+        return results;
     }
 
     public async Task<IEnumerable<UserDto>> GetTechniciansAsync()
     {
         var technicians = await _userRepository.GetByRoleAsync("Technician");
-        return technicians.Select(MapToDto);
+        var results = new List<UserDto>();
+        foreach (var user in technicians)
+        {
+            results.Add(await MapToDtoAsync(user));
+        }
+        return results;
     }
 
     public async Task<UserDto?> UpdateProfileAsync(Guid userId, UpdateProfileRequest request)
@@ -228,7 +249,7 @@ public class UserService : IUserService
 
         await _userRepository.UpdateAsync(user);
         await _unitOfWork.SaveChangesAsync();
-        return MapToDto(user);
+        return await MapToDtoAsync(user);
     }
 
     public async Task<(bool Success, string? ErrorMessage)> ChangePasswordAsync(
@@ -281,14 +302,25 @@ public class UserService : IUserService
         return (true, null);
     }
 
-    private static UserDto MapToDto(User user) => new()
+    private async Task<UserDto> MapToDtoAsync(User user)
     {
-        Id = user.Id,
-        FullName = user.FullName,
-        Email = user.Email,
-        Role = user.Role,
-        PhoneNumber = user.PhoneNumber,
-        Department = user.Department,
-        AvatarUrl = user.AvatarUrl
-    };
+        var isSupervisor = false;
+        if (user.Role == UserRole.Technician)
+        {
+            var technician = await _technicianRepository.GetByUserIdAsync(user.Id);
+            isSupervisor = technician != null && technician.IsSupervisor;
+        }
+
+        return new UserDto
+        {
+            Id = user.Id,
+            FullName = user.FullName,
+            Email = user.Email,
+            Role = user.Role,
+            PhoneNumber = user.PhoneNumber,
+            Department = user.Department,
+            AvatarUrl = user.AvatarUrl,
+            IsSupervisor = isSupervisor
+        };
+    }
 }

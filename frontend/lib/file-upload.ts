@@ -5,6 +5,7 @@ export interface UploadedFile {
   type: string
   url: string
   uploadedAt: string
+  file?: File // Store the actual File object for upload
 }
 
 export const validateFile = (file: File): string | null => {

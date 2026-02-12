@@ -72,13 +72,33 @@ public class AdminFieldDefinitionsController : ControllerBase
                     System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                 var columnName = columnMatch.Success ? columnMatch.Groups[1].Value : "unknown";
                 
-                return StatusCode(500, new
+                // In Development, provide detailed error; in Production, provide safe message
+                var isDevelopment = HttpContext.RequestServices.GetRequiredService<Microsoft.Extensions.Hosting.IHostEnvironment>().IsDevelopment();
+                
+                if (isDevelopment)
                 {
-                    message = "خطای پایگاه داده: لطفاً سرور بک‌اند را راه‌اندازی مجدد کنید تا مایگریشن‌ها اعمال شوند.",
-                    error = $"Missing column: {columnName}. The database schema needs to be updated.",
-                    hint = "Restart the backend server - migrations and schema guards are applied automatically on startup.",
-                    columnName = columnName
-                });
+                    return StatusCode(500, new ProblemDetails
+                    {
+                        Status = 500,
+                        Title = "Database Schema Error",
+                        Detail = $"Missing column '{columnName}' in SubcategoryFieldDefinitions table. The schema guard will attempt to fix this on next startup.",
+                        Instance = HttpContext.Request.Path,
+                        Extensions = 
+                        {
+                            { "error", errorMessage },
+                            { "missingColumn", columnName },
+                            { "fix", "Restart the backend server - the schema guard will automatically add missing columns." }
+                        }
+                    });
+                }
+                else
+                {
+                    return StatusCode(500, new
+                    {
+                        message = "Database schema needs upgrade. Please contact the administrator.",
+                        error = "SCHEMA_UPGRADE_REQUIRED"
+                    });
+                }
             }
             
             return StatusCode(500, new
@@ -107,19 +127,33 @@ public class AdminFieldDefinitionsController : ControllerBase
                     "[AdminFieldDefinitions] Schema error detected - {ColumnName} column missing. Schema guard should fix on next startup.",
                     columnName);
                 
-                return StatusCode(500, new ProblemDetails
+                // In Development, provide detailed error; in Production, provide safe message
+                var isDevelopment = HttpContext.RequestServices.GetRequiredService<Microsoft.Extensions.Hosting.IHostEnvironment>().IsDevelopment();
+                
+                if (isDevelopment)
                 {
-                    Status = 500,
-                    Title = "خطای پایگاه داده",
-                    Detail = "لطفاً سرور بک‌اند را راه‌اندازی مجدد کنید تا مایگریشن‌ها اعمال شوند.",
-                    Instance = HttpContext.Request.Path,
-                    Extensions = 
+                    return StatusCode(500, new ProblemDetails
                     {
-                        { "error", sqliteEx.Message },
-                        { "hint", "Restart the backend server - migrations and schema guards are applied automatically on startup." },
-                        { "missingColumn", columnName }
-                    }
-                });
+                        Status = 500,
+                        Title = "Database Schema Error",
+                        Detail = $"Missing column '{columnName}' in SubcategoryFieldDefinitions table. The schema guard will attempt to fix this on next startup.",
+                        Instance = HttpContext.Request.Path,
+                        Extensions = 
+                        {
+                            { "error", sqliteEx.Message },
+                            { "missingColumn", columnName },
+                            { "fix", "Restart the backend server - the schema guard will automatically add missing columns." }
+                        }
+                    });
+                }
+                else
+                {
+                    return StatusCode(500, new
+                    {
+                        message = "Database schema needs upgrade. Please contact the administrator.",
+                        error = "SCHEMA_UPGRADE_REQUIRED"
+                    });
+                }
             }
             
             return StatusCode(500, new

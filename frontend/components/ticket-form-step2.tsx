@@ -1,5 +1,6 @@
 ﻿"use client"
 
+import { useState, useEffect } from "react"
 import { Controller } from "react-hook-form"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -9,6 +10,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { FileUpload } from "@/components/file-upload"
 import { DynamicFieldRenderer } from "@/components/dynamic-field-renderer"
 import type { FormFieldDef } from "@/lib/dynamic-forms"
+import { getEffectiveFieldDefinitions, type FieldDefinitionResponse } from "@/lib/field-definitions-api"
+import { useAuth } from "@/lib/auth-context"
 import {
   FileText,
   Paperclip,
@@ -44,18 +47,82 @@ export function TicketFormStep2({
   attachedFiles,
   onFilesChange,
 }: TicketFormStep2Props) {
-  const getDefinedFields = (): FormFieldDef[] => {
-    if (!categoriesData || !selectedIssue) return []
-    const cat = categoriesData[selectedIssue]
-    if (!cat) return []
-    const sub = selectedSubIssue ? cat?.subIssues?.[selectedSubIssue] : undefined
-    const subFields: FormFieldDef[] = sub?.fields || []
-    const catFields: FormFieldDef[] = cat?.fields || []
-    // Prefer sub-issue fields; fallback to category-level if empty
-    return (subFields && subFields.length > 0 ? subFields : catFields) || []
+  const { token } = useAuth()
+  const [backendFields, setBackendFields] = useState<FieldDefinitionResponse[]>([])
+  const [loadingFields, setLoadingFields] = useState(false)
+
+  // Fetch field definitions from backend when category/subcategory changes
+  useEffect(() => {
+    const fetchFields = async () => {
+      if (!token || !selectedIssue || !selectedSubIssue || !categoriesData) {
+        setBackendFields([])
+        return
+      }
+
+      const cat = categoriesData[selectedIssue]
+      const sub = cat?.subIssues?.[selectedSubIssue]
+      const categoryBackendId = cat?.backendId
+      const subcategoryBackendId = sub?.backendId
+
+      if (!categoryBackendId || typeof categoryBackendId !== "number") {
+        setBackendFields([])
+        return
+      }
+
+      setLoadingFields(true)
+      try {
+        const fields = await getEffectiveFieldDefinitions(token, categoryBackendId, subcategoryBackendId)
+        setBackendFields(fields)
+      } catch (error) {
+        console.error("[TicketFormStep2] Error fetching fields:", error)
+        setBackendFields([])
+      } finally {
+        setLoadingFields(false)
+      }
+    }
+
+    fetchFields()
+  }, [token, selectedIssue, selectedSubIssue, categoriesData])
+
+  // Map backend fields to FormFieldDef format
+  const mapBackendFieldsToFormDefs = (): FormFieldDef[] => {
+    return backendFields.map((field) => {
+      // Map backend FieldType to frontend FieldType
+      let frontendType: FormFieldDef["type"] = "text"
+      const backendType = field.type.toLowerCase()
+      if (backendType === "multiselect") {
+        frontendType = "multiselect"
+      } else if (backendType === "select") {
+        frontendType = "select"
+      } else if (backendType === "textarea") {
+        frontendType = "textarea"
+      } else if (backendType === "number") {
+        frontendType = "number"
+      } else if (backendType === "email") {
+        frontendType = "email"
+      } else if (backendType === "phone") {
+        frontendType = "tel"
+      } else if (backendType === "date") {
+        frontendType = "date"
+      } else if (backendType === "boolean") {
+        frontendType = "checkbox"
+      } else {
+        frontendType = "text"
+      }
+      
+      return {
+        id: String(field.id), // Use backend id for dyn_{id} mapping
+        label: field.label,
+        type: frontendType,
+        required: field.isRequired,
+        placeholder: field.defaultValue || undefined,
+        options: field.options || [],
+        helpText: undefined,
+      }
+    })
   }
 
-  const dynamicDefs = getDefinedFields()
+  const dynamicDefs = mapBackendFieldsToFormDefs()
   const renderError = (name: string) => {
     const message = errors?.[name]?.message
     return message ? <p className="text-sm text-red-500 text-right">{message}</p> : null
@@ -1196,7 +1263,7 @@ export function TicketFormStep2({
         </CardContent>
       </Card>
 
-      {/* Dynamic Admin-Defined Fields (if any) */}
+      {/* Dynamic Admin-Defined Fields */}
       {dynamicDefs.length > 0 ? (
         <Card>
           <CardHeader>
@@ -1206,16 +1273,25 @@ export function TicketFormStep2({
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {dynamicDefs.map((f) => (
-                <DynamicFieldRenderer key={f.id} field={f} control={control} errors={errors} />
-              ))}
-            </div>
+            {loadingFields ? (
+              <div className="text-center py-4 text-muted-foreground">در حال بارگذاری فیلدها...</div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {dynamicDefs.map((f, index) => {
+                  return (
+                    <DynamicFieldRenderer 
+                      key={`${f.id}-${index}`} 
+                      field={{...f, id: f.id}} 
+                      control={control} 
+                      errors={errors} 
+                    />
+                  )
+                })}
+              </div>
+            )}
           </CardContent>
         </Card>
-      ) : (
-        <>{renderDynamicFields()}</>
-      )}
+      ) : null}
 
       {/* File Upload */}
       <Card>

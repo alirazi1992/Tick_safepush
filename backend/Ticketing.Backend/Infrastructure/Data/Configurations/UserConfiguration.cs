@@ -16,5 +16,17 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         builder.Property(u => u.PhoneNumber).HasMaxLength(50);
         builder.Property(u => u.Department).HasMaxLength(200);
         builder.Property(u => u.AvatarUrl).HasMaxLength(8192);
+
+        // Lockout fields for account security
+        builder.Property(u => u.LockoutEnabled)
+            .IsRequired()
+            .HasDefaultValue(false);
+
+        builder.Property(u => u.LockoutEnd)
+            .IsRequired(false);
+
+        builder.Property(u => u.SecurityStamp)
+            .HasMaxLength(256)
+            .IsRequired(false);
     }
 }

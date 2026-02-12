@@ -9,7 +9,6 @@ public interface IUnitOfWork
     ITicketRepository Tickets { get; }
     IUserRepository Users { get; }
     ICategoryRepository Categories { get; }
-    INotificationRepository Notifications { get; }
     ITechnicianRepository Technicians { get; }
     ITicketActivityRepository TicketActivities { get; }
     ITicketMessageRepository TicketMessages { get; }

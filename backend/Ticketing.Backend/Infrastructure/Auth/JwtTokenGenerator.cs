@@ -9,7 +9,7 @@ namespace Ticketing.Backend.Infrastructure.Auth;
 
 public interface IJwtTokenGenerator
 {
-    string GenerateToken(User user);
+    string GenerateToken(User user, bool isSupervisor);
 }
 
 public class JwtTokenGenerator : IJwtTokenGenerator
@@ -32,7 +32,7 @@ public class JwtTokenGenerator : IJwtTokenGenerator
     /// 
     /// CRITICAL: This method trusts the database - user.Role must be valid when persisted
     /// </summary>
-    public string GenerateToken(User user)
+    public string GenerateToken(User user, bool isSupervisor)
     {
         var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_settings.Secret));
         var credentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
@@ -46,7 +46,11 @@ public class JwtTokenGenerator : IJwtTokenGenerator
             new(ClaimTypes.NameIdentifier, user.Id.ToString()),
             new(JwtRegisteredClaimNames.Email, user.Email),
             new(ClaimTypes.Role, user.Role.ToString()), // EXACT role from database - no modifications, no hardcoding
-            new("name", user.FullName)
+            new("name", user.FullName),
+            // Supervisor claims for policy checks (string "true"/"false")
+            // Keep both keys for backward compatibility
+            new("isSupervisor", isSupervisor ? "true" : "false"),
+            new("is_supervisor", isSupervisor ? "true" : "false")
         };
 
         var token = new JwtSecurityToken(

@@ -17,6 +17,7 @@ public class CreateFieldDefinitionRequest
     public List<FieldOption>? Options { get; set; }
     public double? Min { get; set; }
     public double? Max { get; set; }
+    public int? DisplayOrder { get; set; }
 }
 
 public class UpdateFieldDefinitionRequest
@@ -30,12 +31,15 @@ public class UpdateFieldDefinitionRequest
     public List<FieldOption>? Options { get; set; }
     public double? Min { get; set; }
     public double? Max { get; set; }
+    public int? DisplayOrder { get; set; }
+    public bool? IsActive { get; set; }
 }
 
 public class FieldDefinitionResponse
 {
     public int Id { get; set; }
-    public int SubcategoryId { get; set; }
+    public int? CategoryId { get; set; }
+    public int? SubcategoryId { get; set; }
     public string Name { get; set; } = string.Empty;
     public string Label { get; set; } = string.Empty;
     public string Key { get; set; } = string.Empty;
@@ -45,4 +49,7 @@ public class FieldDefinitionResponse
     public List<FieldOption>? Options { get; set; }
     public double? Min { get; set; }
     public double? Max { get; set; }
+    public int DisplayOrder { get; set; }
+    public bool IsActive { get; set; }
+    public string ScopeType { get; set; } = "Subcategory";
 }

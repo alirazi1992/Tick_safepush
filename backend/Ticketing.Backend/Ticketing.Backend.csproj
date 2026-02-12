@@ -20,12 +20,18 @@
     </PackageReference>
 
     <!-- Auth / JWT -->
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.Negotiate" Version="8.0.4" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="8.0.4" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.4" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="7.5.2" />
 
     <!-- Swagger / OpenAPI -->
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.8.1" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="8.0.4" />
+
+    <!-- Excel export -->
+    <PackageReference Include="ClosedXML" Version="0.104.2" />
   </ItemGroup>
 
   <ItemGroup>
@@ -35,5 +41,8 @@
     <EmbeddedResource Remove="src/**" />
     <None Remove="src/**" />
   </ItemGroup>
+
+  <!-- Main app uses root-level Infrastructure (Api, Application, Domain, Infrastructure). -->
+  <!-- src\Ticketing.Infrastructure is legacy and was causing MSB4276 workload SDK resolution failures. -->
 
 </Project>

@@ -1,8 +1,9 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { apiRequest } from "@/lib/api-client";
-import type { ApiAuthResponse, ApiUserDto, ApiUserRole } from "@/lib/api-types";
+import { getApiBaseUrl } from "@/lib/api-client";
+import type { ApiAuthResponse, ApiAuthSessionResponse, ApiUserRole } from "@/lib/api-types";
 
 interface User {
   id: string;
@@ -12,7 +13,10 @@ interface User {
   department?: string | null;
   role: "client" | "engineer" | "admin";
   avatar?: string | null;
+  isSupervisor?: boolean;
 }
+
+type AuthMode = "auto" | "lan" | "external";
 
 interface AuthContextType {
   user: User | null;
@@ -27,55 +31,35 @@ interface AuthContextType {
     password: string;
   }) => Promise<boolean>;
   logout: () => void;
-  updateProfile: (
-    updates: Partial<Omit<User, "id" | "role">>
-  ) => Promise<boolean>;
-  changePassword: (
-    currentPassword: string,
-    newPassword: string,
-    confirmNewPassword: string
-  ) => Promise<boolean>;
+  updateProfile: (updates: Partial<Omit<User, "id" | "role">>) => Promise<boolean>;
+  changePassword: (currentPassword: string, newPassword: string, confirmNewPassword: string) => Promise<boolean>;
+  refreshSession: () => Promise<void>;
+  startExternalLogin: () => Promise<void>;
   isLoading: boolean;
+  authMode: AuthMode;
+  isExternalMode: boolean;
+  isLanMode: boolean;
 }
 
 const TOKEN_STORAGE_KEY = "ticketing.auth.token";
 const USER_STORAGE_KEY = "ticketing.auth.user";
+const COOKIE_SESSION_TOKEN = "__cookie_session__";
+const AUTH_MODE = (process.env.NEXT_PUBLIC_AUTH_MODE?.toLowerCase() ?? "auto") as AuthMode;
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-/**
- * Map backend role → frontend role
- * Supports both numeric enums (0,1,2) and string enums ("Admin", "Technician", "Client").
- */
-const roleFromApi = (role: ApiUserRole): User["role"] => {
-  // If backend sends numbers (0,1,2)
-  if (typeof role === "number") {
-    switch (role) {
-      case 2:
-        return "admin";
-      case 1:
-        return "engineer";
-      default:
-        return "client";
-    }
-  }
-
-  // If backend sends strings ("Admin", "Technician", "Client")
-  switch (role.toString().toLowerCase()) {
-    case "admin":
-      return "admin";
-    case "technician":
-      return "engineer";
-    default:
-      return "client";
-  }
+const roleFromApi = (role: ApiUserRole | string): User["role"] => {
+  const normalized = role.toString().toLowerCase();
+  if (normalized === "admin") return "admin";
+  if (normalized === "technician" || normalized === "engineer") return "engineer";
+  return "client";
 };
 
-/**
- * Map frontend role → backend role
- * Here we return the **string** form so TypeScript is happy with ApiUserRole.
- * (Backend can still interpret this if configured for string enums, or ignore it.)
- */
+const roleFromSession = (session: ApiAuthSessionResponse): User["role"] => {
+  const role = session.tikqRoles?.[0] ?? "Client";
+  return roleFromApi(role);
+};
+
 const roleToApi = (role: string): ApiUserRole => {
   switch (role) {
     case "admin":
@@ -87,19 +71,25 @@ const roleToApi = (role: string): ApiUserRole => {
   }
 };
 
-const mapUser = (dto: ApiUserDto): User => ({
-  id: dto.id,
-  name: dto.fullName,
-  email: dto.email,
-  role: roleFromApi(dto.role),
-  phone: dto.phoneNumber ?? null,
-  department: dto.department ?? null,
-  avatar: dto.avatarUrl ?? null,
+const mapSessionToUser = (session: ApiAuthSessionResponse): User => ({
+  id: session.userId ?? "",
+  name: session.displayName ?? session.email ?? "Unknown User",
+  email: session.email ?? "",
+  role: roleFromSession(session),
+  phone: null,
+  department: null,
+  avatar: null,
+  isSupervisor: session.isSupervisor ?? false,
 });
 
-function persistSession(token: string, user: User) {
+function persistSession(token: string | null, user: User) {
   if (typeof window === "undefined") return;
-  localStorage.setItem(TOKEN_STORAGE_KEY, token);
+  if (token && token !== COOKIE_SESSION_TOKEN) {
+    localStorage.setItem(TOKEN_STORAGE_KEY, token);
+  } else {
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+  }
+
   localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
   localStorage.setItem("userEmail", user.email);
   localStorage.setItem("userName", user.name);
@@ -118,25 +108,52 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  const fetchCurrentUser = async (authToken: string) => {
+  const authMode: AuthMode = useMemo(() => {
+    if (AUTH_MODE === "lan" || AUTH_MODE === "external" || AUTH_MODE === "auto") {
+      return AUTH_MODE;
+    }
+
+    return "auto";
+  }, []);
+
+  const isExternalMode = authMode === "external";
+  const isLanMode = authMode === "lan" || authMode === "auto";
+
+  const refreshSession = async () => {
+    const storedToken = typeof window !== "undefined" ? localStorage.getItem(TOKEN_STORAGE_KEY) : null;
     try {
-      const me = await apiRequest<ApiUserDto>("/api/auth/me", {
-        token: authToken,
-        silent: true, // Suppress error logging since we handle it here
+      const session = await apiRequest<ApiAuthSessionResponse>("/api/auth/me", {
+        token: storedToken,
+        silent: true,
       });
-      const mapped = mapUser(me);
-      setUser(mapped);
-      persistSession(authToken, mapped);
-    } catch (error: any) {
-      // If 401, token is invalid - clear session
-      if (error?.status === 401) {
-        console.warn("[AuthContext] Token invalid or expired, clearing session");
+
+      if (!session?.isAuthenticated) {
+        setUser(null);
+        setToken(null);
+        clearSession();
+        return;
       }
-      clearSession();
-      setUser(null);
-      setToken(null);
-    } finally {
-      setIsLoading(false);
+
+      const mapped = mapSessionToUser(session);
+      setUser(mapped);
+      const effectiveToken = storedToken ?? COOKIE_SESSION_TOKEN;
+      setToken(effectiveToken);
+      persistSession(effectiveToken, mapped);
+    } catch (error: any) {
+      if (error?.status === 401 || error?.status === 403) {
+        setUser(null);
+        if (!storedToken) {
+          setToken(null);
+        }
+        if (error?.status === 403) {
+          clearSession();
+          setToken(null);
+          throw new Error(error?.message || "No access to TikQ");
+        }
+        return;
+      }
+
+      throw error;
     }
   };
 
@@ -148,7 +165,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const storedToken = localStorage.getItem(TOKEN_STORAGE_KEY);
     const storedUser = localStorage.getItem(USER_STORAGE_KEY);
-
     if (storedToken) {
       setToken(storedToken);
     }
@@ -161,20 +177,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    if (storedToken) {
-      // Add timeout to prevent hanging if backend is not available
-      const timeoutId = setTimeout(() => {
+    const init = async () => {
+      try {
+        await refreshSession();
+      } catch {
+        // Initial load can start unauthenticated or forbidden.
+      } finally {
         setIsLoading(false);
-      }, 5000); // 5 second timeout
+      }
+    };
 
-      fetchCurrentUser(storedToken)
-        .finally(() => {
-          clearTimeout(timeoutId);
-        });
-    } else {
-      setIsLoading(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void init();
   }, []);
 
   const login = async (email: string, password: string) => {
@@ -184,19 +197,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         method: "POST",
         body: { email, password },
       });
-      const mapped = mapUser(response.user);
+
+      const mapped: User = {
+        id: response.user.id,
+        name: response.user.fullName,
+        email: response.user.email,
+        role: roleFromApi(response.user.role),
+        phone: response.user.phoneNumber ?? null,
+        department: response.user.department ?? null,
+        avatar: response.user.avatarUrl ?? null,
+        isSupervisor: response.user.isSupervisor ?? false,
+      };
+
       setUser(mapped);
       setToken(response.token);
       persistSession(response.token, mapped);
       return true;
-    } catch (error: any) {
-      // Log the actual error for debugging
-      console.error("Login error:", error);
-      // Check if it's a network error (backend not running)
-      if (error?.message?.includes("fetch") || error?.message?.includes("Failed to fetch")) {
-        console.error("Backend may not be running. Check if the API server is running on http://localhost:5000");
-      }
-      return false;
     } finally {
       setIsLoading(false);
     }
@@ -223,7 +239,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           department: userData.department,
         },
       });
-      const mapped = mapUser(response.user);
+
+      const mapped: User = {
+        id: response.user.id,
+        name: response.user.fullName,
+        email: response.user.email,
+        role: roleFromApi(response.user.role),
+        phone: response.user.phoneNumber ?? null,
+        department: response.user.department ?? null,
+        avatar: response.user.avatarUrl ?? null,
+        isSupervisor: response.user.isSupervisor ?? false,
+      };
+
       setUser(mapped);
       setToken(response.token);
       persistSession(response.token, mapped);
@@ -236,32 +263,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = () => {
+    void apiRequest("/api/auth/adfs/logout", {
+      method: "POST",
+      token,
+      silent: true,
+    }).catch(() => {});
+
     setUser(null);
     setToken(null);
     clearSession();
   };
 
   const updateProfile = async (updates: Partial<Omit<User, "id" | "role">>) => {
-    if (!token) return false;
     try {
       const payload: Record<string, unknown> = {};
       if (updates.name) payload.fullName = updates.name;
       if (updates.email) payload.email = updates.email;
-      if (typeof updates.phone !== "undefined")
-        payload.phoneNumber = updates.phone;
-      if (typeof updates.department !== "undefined")
-        payload.department = updates.department;
-      if (typeof updates.avatar !== "undefined")
-        payload.avatarUrl = updates.avatar;
+      if (typeof updates.phone !== "undefined") payload.phoneNumber = updates.phone;
+      if (typeof updates.department !== "undefined") payload.department = updates.department;
+      if (typeof updates.avatar !== "undefined") payload.avatarUrl = updates.avatar;
 
-      const updated = await apiRequest<ApiUserDto>("/api/auth/me", {
+      await apiRequest("/api/auth/me", {
         method: "PUT",
         token,
         body: payload,
       });
-      const mapped = mapUser(updated);
-      setUser(mapped);
-      persistSession(token, mapped);
+
+      await refreshSession();
       return true;
     } catch {
       return false;
@@ -271,25 +299,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const changePassword = async (
     currentPassword: string,
     newPassword: string,
-    confirmNewPassword: string
+    confirmNewPassword: string,
   ) => {
-    if (!token) return false;
-    try {
-      const response = await apiRequest<{ success: boolean; message: string }>("/api/auth/change-password", {
-        method: "POST",
-        token,
-        body: { 
-          currentPassword, 
-          newPassword, 
-          confirmNewPassword 
-        },
-      });
-      return response?.success ?? true;
-    } catch (error: any) {
-      console.error("Change password error:", error);
-      // Re-throw to allow form to handle specific error messages
-      throw error;
-    }
+    await apiRequest<{ success: boolean; message: string }>("/api/auth/change-password", {
+      method: "POST",
+      token,
+      body: {
+        currentPassword,
+        newPassword,
+        confirmNewPassword,
+      },
+    });
+    return true;
+  };
+
+  const startExternalLogin = async () => {
+    const apiBaseUrl = await getApiBaseUrl();
+    const returnUrl = encodeURIComponent("/");
+    window.location.href = `${apiBaseUrl}/api/auth/adfs/login?returnUrl=${returnUrl}`;
   };
 
   const value: AuthContextType = {
@@ -300,7 +327,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     logout,
     updateProfile,
     changePassword,
+    refreshSession,
+    startExternalLogin,
     isLoading,
+    authMode,
+    isExternalMode,
+    isLanMode,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -308,8 +340,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 export function useAuth() {
   const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error("useAuth must be used within an AuthProvider");
+  if (!context) {
+    throw new Error("useAuth must be used within AuthProvider");
   }
   return context;
 }

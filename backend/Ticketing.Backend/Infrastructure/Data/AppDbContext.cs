@@ -10,12 +10,18 @@ public class AppDbContext : DbContext
     public DbSet<TicketMessage> TicketMessages => Set<TicketMessage>();
     public DbSet<Category> Categories => Set<Category>();
     public DbSet<Subcategory> Subcategories => Set<Subcategory>();
+    public DbSet<CategoryFieldDefinition> CategoryFieldDefinitions => Set<CategoryFieldDefinition>();
     public DbSet<SubcategoryFieldDefinition> SubcategoryFieldDefinitions => Set<SubcategoryFieldDefinition>();
+    public DbSet<TicketFieldValue> TicketFieldValues => Set<TicketFieldValue>();
     public DbSet<Attachment> Attachments => Set<Attachment>();
-    public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<SystemSettings> SystemSettings => Set<SystemSettings>();
     public DbSet<UserPreferences> UserPreferences => Set<UserPreferences>();
     public DbSet<Technician> Technicians => Set<Technician>();
+    public DbSet<TechnicianSubcategoryPermission> TechnicianSubcategoryPermissions => Set<TechnicianSubcategoryPermission>();
+    public DbSet<TicketTechnicianAssignment> TicketTechnicianAssignments => Set<TicketTechnicianAssignment>();
+    public DbSet<TicketActivityEvent> TicketActivityEvents => Set<TicketActivityEvent>();
+    public DbSet<TicketUserState> TicketUserStates => Set<TicketUserState>();
+    public DbSet<SupervisorTechnicianLink> SupervisorTechnicianLinks => Set<SupervisorTechnicianLink>();
 
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
     {

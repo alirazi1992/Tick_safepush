@@ -12,15 +12,45 @@ This is a full C# / ASP.NET Core Web API backend for the Next.js ticketing front
    dotnet restore
    ```
 2. Apply migrations (optional if using automatic migration on startup)
+   From the backend project directory (`Ticketing.Backend`):
    ```bash
    dotnet ef database update
    ```
+   If you see SQLite errors like "no such column: t.AcceptedAt", the DB was created before a migration added that column. Either run the command above to apply pending migrations, or restart the API (startup schema guards may add missing columns such as `AcceptedAt` on `TicketTechnicianAssignments`).
 3. Run the API
    ```bash
    dotnet run
    ```
 
 The API listens on `http://localhost:5000` (HTTPS `https://localhost:7000`). CORS is enabled for `http://localhost:3000`.
+
+## Dev Reset (DLL lock cleanup)
+If `dotnet run` fails with MSB3027/MSB3021 due to locked DLLs, stop the old process and reset the build:
+
+```powershell
+# Stop a known PID (example)
+Stop-Process -Id 18092 -Force
+
+# Stop any running backend by name
+Get-Process -Name "Ticketing.Backend" -ErrorAction SilentlyContinue | Stop-Process -Force
+
+# Stop dotnet processes running the backend DLL
+Get-CimInstance Win32_Process -Filter "Name = 'dotnet.exe'" |
+  Where-Object { $_.CommandLine -match "Ticketing.Backend\.dll" } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+```
+
+Or run the repo script (recommended):
+
+```powershell
+.\scripts\dev-reset.ps1
+```
+
+You can also pass a PID:
+
+```powershell
+.\scripts\dev-reset.ps1 -Pid 18092
+```
 
 ## Default Users
 - Admin: `admin@test.com` / `Admin123!`
@@ -45,5 +75,6 @@ The API listens on `http://localhost:5000` (HTTPS `https://localhost:7000`). COR
   ```
 
 ## Notes
-- The database is automatically migrated and seeded on startup.
+- The database is automatically migrated and seeded on startup. Schema guards also ensure critical columns exist (e.g. `AcceptedAt` on `TicketTechnicianAssignments`); if a column is missing, run `dotnet ef database update` from the `Ticketing.Backend` folder or restart the API.
 - Update the `Jwt:Secret` in `appsettings.json` or set `JWT_SECRET` environment variable for production.
+- Hybrid enterprise authentication details (Negotiate + ADFS + Boss DB sync) are documented in `HOW_TO_AUTH.md`.

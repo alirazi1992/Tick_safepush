@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
@@ -23,7 +23,10 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "@/hooks/use-toast";
+import { toFaDateTime } from "@/lib/datetime";
 import { useAuth } from "@/lib/auth-context";
+import { useCategories } from "@/services/useCategories";
+import { categoryService } from "@/services/CategoryService";
 import {
   Plus,
   Edit,
@@ -62,6 +65,7 @@ export function CategoryManagement({
   onCategoryUpdate: _legacyOnCategoryUpdate,
 }: CategoryManagementProps) {
   const { token } = useAuth();
+  const { save: saveCategories } = useCategories();
   const [categories, setCategories] = useState<ApiCategoryResponse[]>([]);
   const [subcategories, setSubcategories] = useState<ApiSubcategoryResponse[]>([]);
   const [loading, setLoading] = useState(false);
@@ -72,6 +76,7 @@ export function CategoryManagement({
   const [editingSubCategory, setEditingSubCategory] = useState<ApiSubcategoryResponse | null>(null);
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
   const [subCategoryDialogOpen, setSubCategoryDialogOpen] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const [newCategoryData, setNewCategoryData] = useState({
     name: "",
     description: "",
@@ -85,7 +90,7 @@ export function CategoryManagement({
 
   // Field designer state
   const [fieldDesignerOpen, setFieldDesignerOpen] = useState(false);
-  const [designingSubId, setDesigningSubId] = useState<number | null>(null);
+  const [designingScope, setDesigningScope] = useState<{ type: "category" | "subcategory"; id: number } | null>(null);
 
   // Load categories on mount and when search query changes
   useEffect(() => {
@@ -109,6 +114,7 @@ export function CategoryManagement({
     try {
       const result = await getAdminCategories(token, { search: searchQuery });
       setCategories(result.items);
+      setLastRefreshedAt(new Date());
     } catch (error: any) {
       console.error("Failed to load categories:", error);
       toast({
@@ -118,6 +124,16 @@ export function CategoryManagement({
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const refreshCategoryContext = async () => {
+    try {
+      const data = await categoryService.list();
+      await saveCategories(data);
+      setLastRefreshedAt(new Date());
+    } catch (error) {
+      console.error("Failed to refresh category context", error);
     }
   };
 
@@ -150,19 +166,46 @@ export function CategoryManagement({
     }
 
     try {
-      await createCategory(token, newCategoryData);
+      console.log("[CategoryManagement] Creating category:", newCategoryData);
+      const createdCategory = await createCategory(token, newCategoryData);
+      console.log("[CategoryManagement] Category created successfully:", createdCategory);
+      
+      // Verify we got a valid response with an ID
+      if (!createdCategory || !createdCategory.id) {
+        throw new Error("Server returned invalid response - no category ID");
+      }
+      
       toast({
         title: "موفق",
-        description: "دسته‌بندی جدید ایجاد شد",
+        description: `دسته‌بندی "${createdCategory.name}" با شناسه ${createdCategory.id} ایجاد شد`,
       });
       setCategoryDialogOpen(false);
       setNewCategoryData({ name: "", description: "", isActive: true });
+      
+      // Refresh categories list
+      console.log("[CategoryManagement] Refreshing categories list...");
       await loadCategories();
+      await refreshCategoryContext();
+      console.log("[CategoryManagement] Categories refreshed");
     } catch (error: any) {
-      console.error("Failed to create category:", error);
+      console.error("[CategoryManagement] Failed to create category:", error);
+      const errorMessage = error?.message || "لطفاً دوباره تلاش کنید";
+      const statusCode = error?.status;
+      
+      let description = errorMessage;
+      if (statusCode === 400) {
+        description = `خطای اعتبارسنجی: ${errorMessage}`;
+      } else if (statusCode === 401 || statusCode === 403) {
+        description = "شما مجوز ایجاد دسته‌بندی را ندارید";
+      } else if (statusCode === 409) {
+        description = "این دسته‌بندی قبلاً وجود دارد";
+      } else if (statusCode >= 500) {
+        description = `خطای سرور: ${errorMessage}`;
+      }
+      
       toast({
         title: "خطا در ایجاد دسته‌بندی",
-        description: error?.message || "لطفاً دوباره تلاش کنید",
+        description,
         variant: "destructive",
       });
     }
@@ -187,6 +230,7 @@ export function CategoryManagement({
       toast({ title: "موفق", description: "دسته‌بندی به‌روزرسانی شد" });
       setEditingCategory(null);
       await loadCategories();
+      await refreshCategoryContext();
       if (selectedCategoryId === editingCategory.id) {
         await loadSubcategories(editingCategory.id);
       }
@@ -214,6 +258,7 @@ export function CategoryManagement({
         setSelectedCategoryId(null);
       }
       await loadCategories();
+      await refreshCategoryContext();
     } catch (error: any) {
       console.error("Failed to delete category:", error);
       toast({
@@ -235,20 +280,49 @@ export function CategoryManagement({
     }
 
     try {
-      await createSubcategory(token, selectedCategoryId, newSubCategoryData);
+      console.log("[CategoryManagement] Creating subcategory:", { categoryId: selectedCategoryId, ...newSubCategoryData });
+      const createdSubcategory = await createSubcategory(token, selectedCategoryId, newSubCategoryData);
+      console.log("[CategoryManagement] Subcategory created successfully:", createdSubcategory);
+      
+      // Verify we got a valid response with an ID
+      if (!createdSubcategory || !createdSubcategory.id) {
+        throw new Error("Server returned invalid response - no subcategory ID");
+      }
+      
       toast({
         title: "موفق",
-        description: "زیر دسته جدید ایجاد شد",
+        description: `زیر دسته "${createdSubcategory.name}" با شناسه ${createdSubcategory.id} ایجاد شد`,
       });
       setSubCategoryDialogOpen(false);
       setNewSubCategoryData({ name: "", description: "", isActive: true });
+      
+      // Refresh lists
+      console.log("[CategoryManagement] Refreshing subcategories list...");
       await loadSubcategories(selectedCategoryId);
       await loadCategories();
+      await refreshCategoryContext();
+      console.log("[CategoryManagement] Subcategories refreshed");
     } catch (error: any) {
-      console.error("Failed to create subcategory:", error);
+      console.error("[CategoryManagement] Failed to create subcategory:", error);
+      const errorMessage = error?.message || "لطفاً دوباره تلاش کنید";
+      const statusCode = error?.status;
+      
+      let description = errorMessage;
+      if (statusCode === 400) {
+        description = `خطای اعتبارسنجی: ${errorMessage}`;
+      } else if (statusCode === 401 || statusCode === 403) {
+        description = "شما مجوز ایجاد زیر دسته را ندارید";
+      } else if (statusCode === 404) {
+        description = "دسته‌بندی مورد نظر یافت نشد";
+      } else if (statusCode === 409) {
+        description = "این زیر دسته قبلاً وجود دارد";
+      } else if (statusCode >= 500) {
+        description = `خطای سرور: ${errorMessage}`;
+      }
+      
       toast({
         title: "خطا در ایجاد زیر دسته",
-        description: error?.message || "لطفاً دوباره تلاش کنید",
+        description,
         variant: "destructive",
       });
     }
@@ -275,6 +349,7 @@ export function CategoryManagement({
       if (selectedCategoryId) {
         await loadSubcategories(selectedCategoryId);
         await loadCategories();
+        await refreshCategoryContext();
       }
     } catch (error: any) {
       console.error("Failed to update subcategory:", error);
@@ -299,6 +374,7 @@ export function CategoryManagement({
       if (selectedCategoryId) {
         await loadSubcategories(selectedCategoryId);
         await loadCategories();
+        await refreshCategoryContext();
       }
     } catch (error: any) {
       console.error("Failed to delete subcategory:", error);
@@ -311,7 +387,7 @@ export function CategoryManagement({
   };
 
   // Dynamic Field Designer handlers
-  const openFieldDesigner = (subId: number) => {
+  const openFieldDesigner = (type: "category" | "subcategory", id: number) => {
     if (!token) {
       toast({
         title: "خطا",
@@ -321,7 +397,7 @@ export function CategoryManagement({
       return;
     }
 
-    setDesigningSubId(subId);
+    setDesigningScope({ type, id });
     setFieldDesignerOpen(true);
   };
 
@@ -558,6 +634,10 @@ export function CategoryManagement({
           <p className="text-muted-foreground font-iran">
             مدیریت دسته‌بندی‌ها و زیر دسته‌های تیکت‌ها
           </p>
+          <p className="text-xs text-muted-foreground font-iran mt-1">
+            آخرین بروزرسانی:{" "}
+            {lastRefreshedAt ? toFaDateTime(lastRefreshedAt) : "—"}
+          </p>
         </div>
         <Dialog open={categoryDialogOpen} onOpenChange={setCategoryDialogOpen}>
           <DialogTrigger asChild>
@@ -566,7 +646,7 @@ export function CategoryManagement({
               دسته‌بندی جدید
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-w-md font-iran" dir="rtl">
+          <DialogContent className="max-h-[85vh] overflow-y-auto w-[95vw] sm:w-[90vw] md:max-w-md font-iran" dir="rtl">
             <DialogHeader>
               <DialogTitle className="text-right font-iran">
                 ایجاد دسته‌بندی جدید
@@ -709,17 +789,28 @@ export function CategoryManagement({
                         </div>
                       </div>
                       <div className="flex gap-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditingCategory(category);
-                          }}
-                          className="font-iran"
-                        >
-                          <Edit className="w-3 h-3" />
-                        </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingCategory(category);
+                            }}
+                            className="font-iran"
+                          >
+                            <Edit className="w-3 h-3" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openFieldDesigner("category", category.id);
+                            }}
+                            className="font-iran"
+                          >
+                            <Settings className="w-3 h-3" />
+                          </Button>
                         <Button
                           variant="ghost"
                           size="sm"
@@ -764,7 +855,7 @@ export function CategoryManagement({
                       زیر دسته جدید
                     </Button>
                   </DialogTrigger>
-                  <DialogContent className="max-w-md font-iran" dir="rtl">
+                  <DialogContent className="max-h-[85vh] overflow-y-auto w-[95vw] sm:w-[90vw] md:max-w-md font-iran" dir="rtl">
                     <DialogHeader>
                       <DialogTitle className="text-right font-iran">
                         ایجاد زیر دسته جدید
@@ -897,7 +988,7 @@ export function CategoryManagement({
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => openFieldDesigner(subCategory.id)}
+                            onClick={() => openFieldDesigner("subcategory", subCategory.id)}
                             className="font-iran"
                           >
                             <Settings className="w-3 h-3" />
@@ -937,7 +1028,7 @@ export function CategoryManagement({
           open={!!editingCategory}
           onOpenChange={() => setEditingCategory(null)}
         >
-          <DialogContent className="max-w-md font-iran" dir="rtl">
+          <DialogContent className="max-h-[85vh] overflow-y-auto w-[95vw] sm:w-[90vw] md:max-w-md font-iran" dir="rtl">
             <DialogHeader>
               <DialogTitle className="text-right font-iran">
                 ویرایش دسته‌بندی
@@ -1018,7 +1109,7 @@ export function CategoryManagement({
           open={!!editingSubCategory}
           onOpenChange={() => setEditingSubCategory(null)}
         >
-          <DialogContent className="max-w-md font-iran" dir="rtl">
+          <DialogContent className="max-h-[85vh] overflow-y-auto w-[95vw] sm:w-[90vw] md:max-w-md font-iran" dir="rtl">
             <DialogHeader>
               <DialogTitle className="text-right font-iran">
                 ویرایش زیر دسته
@@ -1095,11 +1186,18 @@ export function CategoryManagement({
       )}
 
       {/* Field Designer Dialog */}
-      {designingSubId !== null && (
+      {designingScope !== null && (
         <SubcategoryFieldDesignerDialog
           open={fieldDesignerOpen}
-          onOpenChange={setFieldDesignerOpen}
-          subcategoryId={designingSubId}
+          onOpenChange={(open) => {
+            setFieldDesignerOpen(open);
+            if (!open) {
+              setDesigningScope(null);
+              void refreshCategoryContext();
+            }
+          }}
+          scopeType={designingScope.type}
+          scopeId={designingScope.id}
           token={token}
         />
       )}

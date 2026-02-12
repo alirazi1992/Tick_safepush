@@ -1,11 +1,13 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Ticketing.Application.DTOs;
 using Ticketing.Application.Exceptions;
 using Ticketing.Application.Services;
 using Ticketing.Domain.Enums;
+using System.Text.Json;
 
 namespace Ticketing.Api.Controllers;
 
@@ -80,8 +82,52 @@ public class TicketsController : ControllerBase
 
     [HttpPost]
     [Authorize(Roles = nameof(UserRole.Client))]
-    public async Task<IActionResult> CreateTicket([FromBody] TicketCreateRequest? request)
+    [RequestSizeLimit(10 * 1024 * 1024)] // 10 MB limit
+    public async Task<IActionResult> CreateTicket([FromForm] string? ticketData, [FromForm] List<IFormFile>? attachments)
     {
+        TicketCreateRequest? request = null;
+        
+        // Parse ticket data from form
+        if (!string.IsNullOrWhiteSpace(ticketData))
+        {
+            try
+            {
+                request = JsonSerializer.Deserialize<TicketCreateRequest>(ticketData, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true,
+                    Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+                });
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogWarning("Failed to parse ticket data from form: {Error}", ex.Message);
+                return BadRequest(new { message = "Invalid ticket data format.", error = "INVALID_JSON" });
+            }
+        }
+        
+        // If no form data, try to get from body (for backward compatibility with JSON-only requests)
+        if (request == null)
+        {
+            // Try reading from body as JSON
+            try
+            {
+                using var reader = new StreamReader(Request.Body);
+                var body = await reader.ReadToEndAsync();
+                if (!string.IsNullOrWhiteSpace(body))
+                {
+                    request = JsonSerializer.Deserialize<TicketCreateRequest>(body, new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true,
+                        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+                    });
+                }
+            }
+            catch
+            {
+                // Ignore - will return error below
+            }
+        }
+
         // Guard clause: request body is required
         if (request == null)
         {
@@ -89,8 +135,8 @@ public class TicketsController : ControllerBase
         }
 
         // Log received request for debugging
-        _logger.LogInformation("CreateTicket called with CategoryId={CategoryId}, SubcategoryId={SubcategoryId}, Priority={Priority}", 
-            request.CategoryId, request.SubcategoryId, request.Priority);
+        _logger.LogInformation("CreateTicket called with CategoryId={CategoryId}, SubcategoryId={SubcategoryId}, Priority={Priority}, AttachmentCount={AttachmentCount}", 
+            request.CategoryId, request.SubcategoryId, request.Priority, attachments?.Count ?? 0);
         
         if (!ModelState.IsValid)
         {
@@ -122,8 +168,27 @@ public class TicketsController : ControllerBase
                 User.FindFirstValue(ClaimTypes.NameIdentifier),
                 User.FindFirstValue(ClaimTypes.Role));
             
-            // Create a new ticket as the current client user
-            var ticket = await _ticketService.CreateTicketAsync(context.Value.userId, request);
+            // Convert IFormFile to FileAttachmentRequest (Application layer abstraction)
+            List<FileAttachmentRequest>? fileAttachments = null;
+            if (attachments != null && attachments.Any())
+            {
+                fileAttachments = new List<FileAttachmentRequest>();
+                foreach (var file in attachments)
+                {
+                    using var memoryStream = new MemoryStream();
+                    await file.CopyToAsync(memoryStream);
+                    fileAttachments.Add(new FileAttachmentRequest
+                    {
+                        FileName = file.FileName,
+                        ContentType = file.ContentType ?? "application/octet-stream",
+                        Content = memoryStream.ToArray(),
+                        FileSize = file.Length
+                    });
+                }
+            }
+            
+            // Create a new ticket as the current client user (with optional attachments)
+            var ticket = await _ticketService.CreateTicketAsync(context.Value.userId, request, fileAttachments);
             _logger.LogInformation("Ticket created {@TicketId} by user {@UserId}", ticket?.Id, context.Value.userId);
             return CreatedAtAction(nameof(GetTicket), new { id = ticket!.Id }, ticket);
         }
@@ -153,6 +218,18 @@ public class TicketsController : ControllerBase
                 error = ex.Code,
                 categoryId = categoryId,
                 subcategoryId = subcategoryId
+            });
+        }
+        catch (ArgumentException ex)
+        {
+            // User ID or other argument validation errors
+            _logger.LogWarning("Ticket creation failed - argument error: {Message} (UserId={UserId})",
+                ex.Message, context.Value.userId);
+            
+            return BadRequest(new
+            {
+                message = ex.Message,
+                error = "INVALID_ARGUMENT"
             });
         }
         catch (InvalidOperationException ex)
@@ -545,6 +622,152 @@ public class TicketsController : ControllerBase
 
         return Ok(new { success = true, message = "Responsible technician set successfully." });
     }
+
+    /// <summary>
+    /// Mark ticket as seen/read (when technician first opens it)
+    /// </summary>
+    [HttpPost("{id}/seen-read")]
+    [Authorize(Roles = nameof(UserRole.Technician) + "," + nameof(UserRole.Admin))]
+    public async Task<IActionResult> MarkAsSeenRead(Guid id)
+    {
+        var context = GetUserContext();
+        if (context == null)
+        {
+            return Unauthorized();
+        }
+
+        var ticket = await _ticketService.UpdateTicketStatusAsync(id, context.Value.userId, context.Value.role, TicketStatus.SeenRead);
+        if (ticket == null)
+        {
+            return NotFound();
+        }
+        return Ok(ticket);
+    }
+
+    /// <summary>
+    /// Mark ticket as in progress (when technician starts working)
+    /// </summary>
+    [HttpPost("{id}/start-work")]
+    [Authorize(Roles = nameof(UserRole.Technician) + "," + nameof(UserRole.Admin))]
+    public async Task<IActionResult> StartWork(Guid id)
+    {
+        var context = GetUserContext();
+        if (context == null)
+        {
+            return Unauthorized();
+        }
+
+        var ticket = await _ticketService.UpdateTicketStatusAsync(id, context.Value.userId, context.Value.role, TicketStatus.InProgress);
+        if (ticket == null)
+        {
+            return NotFound();
+        }
+        return Ok(ticket);
+    }
+
+    /// <summary>
+    /// Mark ticket as solved (when technician finishes work)
+    /// </summary>
+    [HttpPost("{id}/solve")]
+    [Authorize(Roles = nameof(UserRole.Technician) + "," + nameof(UserRole.Admin))]
+    public async Task<IActionResult> Solve(Guid id)
+    {
+        var context = GetUserContext();
+        if (context == null)
+        {
+            return Unauthorized();
+        }
+
+        var ticket = await _ticketService.UpdateTicketStatusAsync(id, context.Value.userId, context.Value.role, TicketStatus.Solved);
+        if (ticket == null)
+        {
+            return NotFound();
+        }
+        return Ok(ticket);
+    }
+
+    /// <summary>
+    /// Mark ticket as redo (when technician needs to redo work)
+    /// </summary>
+    [HttpPost("{id}/redo")]
+    [Authorize(Roles = nameof(UserRole.Technician) + "," + nameof(UserRole.Admin))]
+    public async Task<IActionResult> Redo(Guid id)
+    {
+        var context = GetUserContext();
+        if (context == null)
+        {
+            return Unauthorized();
+        }
+
+        var ticket = await _ticketService.UpdateTicketStatusAsync(id, context.Value.userId, context.Value.role, TicketStatus.Redo);
+        if (ticket == null)
+        {
+            return NotFound();
+        }
+        return Ok(ticket);
+    }
+
+    /// <summary>
+    /// Handoff ticket from one technician to another (Technician or Admin)
+    /// </summary>
+    [HttpPost("{id}/handoff")]
+    [Authorize(Roles = nameof(UserRole.Technician) + "," + nameof(UserRole.Admin))]
+    public async Task<IActionResult> HandoffTicket(Guid id, [FromBody] HandoffTicketRequest? request)
+    {
+        var context = GetUserContext();
+        if (context == null)
+        {
+            return Unauthorized();
+        }
+
+        // Guard clause: request body is required
+        if (request == null)
+        {
+            return BadRequest(new { message = "Request body is required." });
+        }
+
+        try
+        {
+            // For technicians, they can only handoff from themselves
+            var fromTechnicianUserId = context.Value.role == UserRole.Technician 
+                ? context.Value.userId 
+                : (await _ticketService.GetTicketAsync(id, context.Value.userId, context.Value.role))?.AssignedToUserId ?? context.Value.userId;
+
+            var ticket = await _ticketService.HandoffTicketAsync(
+                id, 
+                fromTechnicianUserId, 
+                request.ToTechnicianId, 
+                request.Reason, 
+                request.Note,
+                context.Value.userId,
+                context.Value.role);
+
+            if (ticket == null)
+            {
+                return NotFound();
+            }
+
+            _logger.LogInformation("Ticket {TicketId} handed off from {FromUserId} to {ToTechnicianId} by {ActorUserId}",
+                id, fromTechnicianUserId, request.ToTechnicianId, context.Value.userId);
+
+            return Ok(ticket);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            _logger.LogWarning(ex, "Unauthorized handoff attempt for ticket {TicketId} by user {UserId}", id, context.Value.userId);
+            return StatusCode(403, new { message = ex.Message, error = "UNAUTHORIZED" });
+        }
+        catch (ArgumentException ex)
+        {
+            _logger.LogWarning(ex, "Invalid handoff request for ticket {TicketId}: {Message}", id, ex.Message);
+            return BadRequest(new { message = ex.Message, error = "INVALID_ARGUMENT" });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to handoff ticket {TicketId}", id);
+            return StatusCode(500, new { message = "Failed to handoff ticket", error = "INTERNAL_ERROR" });
+        }
+    }
 }
 
 /// <summary>
@@ -596,4 +819,3 @@ public class AssignmentController : ControllerBase
         }
     }
 }
-

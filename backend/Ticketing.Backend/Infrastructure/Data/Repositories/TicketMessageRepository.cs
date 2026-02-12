@@ -17,6 +17,7 @@ public class TicketMessageRepository : ITicketMessageRepository
     public async Task<IEnumerable<TicketMessage>> GetByTicketIdAsync(Guid ticketId)
     {
         return await _context.TicketMessages
+            .AsNoTracking()
             .Include(m => m.AuthorUser)
             .Where(m => m.TicketId == ticketId)
             .OrderBy(m => m.CreatedAt)

@@ -15,5 +15,9 @@ public class SubcategoryFieldDefinition
     public string? OptionsJson { get; set; }
     public double? Min { get; set; }
     public double? Max { get; set; }
+    public int SortOrder { get; set; }
+    public bool IsActive { get; set; } = true;
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? UpdatedAt { get; set; }
     public Subcategory? Subcategory { get; set; }
 }

@@ -6,7 +6,13 @@ namespace Ticketing.Backend.Application.Repositories;
 /// </summary>
 public interface IUnitOfWork
 {
+    ICategoryFieldDefinitionRepository CategoryFieldDefinitions { get; }
     IFieldDefinitionRepository FieldDefinitions { get; }
+    ITicketTechnicianAssignmentRepository TicketTechnicianAssignments { get; }
+    ITicketActivityEventRepository TicketActivityEvents { get; }
+    ITechnicianSubcategoryPermissionRepository TechnicianSubcategoryPermissions { get; }
+    ITicketUserStateRepository TicketUserStates { get; }
+    ISupervisorTechnicianLinkRepository SupervisorTechnicianLinks { get; }
     
     /// <summary>
     /// Saves all changes made in this unit of work to the database

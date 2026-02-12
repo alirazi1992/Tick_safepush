@@ -1,9 +1,16 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace Ticketing.Backend.Application.DTOs;
 
 public class CategoryRequest
 {
+    [Required(ErrorMessage = "Name is required")]
+    [StringLength(200, MinimumLength = 1, ErrorMessage = "Name must be between 1 and 200 characters")]
     public string Name { get; set; } = string.Empty;
+    
+    [StringLength(1000, ErrorMessage = "Description cannot exceed 1000 characters")]
     public string? Description { get; set; }
+    
     public bool IsActive { get; set; } = true;
 }
 
@@ -19,18 +26,26 @@ public class CategoryResponse
 
 public class SubcategoryRequest
 {
+    [Required(ErrorMessage = "Name is required")]
+    [StringLength(200, MinimumLength = 1, ErrorMessage = "Name must be between 1 and 200 characters")]
     public string Name { get; set; } = string.Empty;
+    
+    [StringLength(1000, ErrorMessage = "Description cannot exceed 1000 characters")]
     public string? Description { get; set; }
+    
     public bool IsActive { get; set; } = true;
 }
 
 public class SubcategoryResponse
 {
     public int Id { get; set; }
+    public int CategoryId { get; set; }
     public string Name { get; set; } = string.Empty;
     public string? Description { get; set; }
     public bool IsActive { get; set; }
     public DateTime CreatedAt { get; set; }
+    public string SubcategoryDisplayCode { get; set; } = string.Empty;
+    public int SortOrder { get; set; }
 }
 
 public class CategoryListResponse

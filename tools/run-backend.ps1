@@ -8,9 +8,12 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# Get script directory and project root
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$repoRoot = Resolve-Path $scriptDir
+# Get script directory and project root (path-robust)
+$scriptDir = $PSScriptRoot
+if (-not $scriptDir) {
+    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+$repoRoot = Split-Path -Parent $scriptDir
 $backendPath = Join-Path $repoRoot "backend\Ticketing.Backend"
 
 Write-Host "=== TikQ Backend Runner ===" -ForegroundColor Cyan
@@ -25,11 +28,35 @@ Write-Host ""
 # Step 2: Wait a moment for processes to fully stop
 Start-Sleep -Milliseconds 500
 
-# Step 3: Check if port is available, fallback to 5001 if needed
+# Step 3: Check if port is available, try to free it if it's our backend, or use fallback
 $selectedPort = $Port
 $portAvailable = $false
 
 Write-Host "Step 2: Checking port availability..." -ForegroundColor Yellow
+
+function Test-IsOurBackendProcess {
+    param([int]$ProcessId)
+    try {
+        $proc = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+        if (-not $proc) { return $false }
+        
+        $procInfo = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
+        $cmdLine = if ($procInfo) { $procInfo.CommandLine } else { "" }
+        $procPath = if ($proc.Path) { $proc.Path } elseif ($procInfo -and $procInfo.ExecutablePath) { $procInfo.ExecutablePath } else { "" }
+        
+        # Check if it's our backend
+        if ($proc.ProcessName -eq "Ticketing.Backend" -or $proc.ProcessName -eq "Ticketing.Api" -or $proc.ProcessName -eq "dotnet") {
+            if ($cmdLine -match "Ticketing\.(Backend|Api)" -or ($procPath -and $procPath -match "Ticketing\.(Backend|Api)")) {
+                if ($procPath -and $procPath.StartsWith($repoRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    return $true
+                }
+            }
+        }
+        return $false
+    } catch {
+        return $false
+    }
+}
 
 try {
     $connections = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
@@ -37,22 +64,47 @@ try {
         $portAvailable = $true
         Write-Host "  Port $Port is available" -ForegroundColor Green
     } else {
-        Write-Host "  Port $Port is still in use" -ForegroundColor Yellow
-        if ($Port -eq 5000) {
-            Write-Host "  Trying fallback port 5001..." -ForegroundColor Yellow
-            $connections5001 = Get-NetTCPConnection -LocalPort 5001 -State Listen -ErrorAction SilentlyContinue
-            if (-not $connections5001) {
-                $selectedPort = 5001
-                $portAvailable = $true
-                Write-Host "  Port 5001 is available (fallback)" -ForegroundColor Green
+        Write-Host "  Port $Port is in use" -ForegroundColor Yellow
+        $pids = $connections | Select-Object -ExpandProperty OwningProcess -Unique
+        $isOurBackend = $false
+        
+        foreach ($pid in $pids) {
+            if (Test-IsOurBackendProcess -ProcessId $pid) {
+                $isOurBackend = $true
+                Write-Host "  Detected our backend process (PID: $pid), attempting to stop it..." -ForegroundColor Yellow
+                try {
+                    Stop-Process -Id $pid -Force -ErrorAction Stop
+                    Start-Sleep -Milliseconds 500
+                    Write-Host "  Process stopped successfully" -ForegroundColor Green
+                    $portAvailable = $true
+                    break
+                } catch {
+                    Write-Host "  Could not stop process: $_" -ForegroundColor Red
+                }
+            }
+        }
+        
+        if (-not $portAvailable) {
+            if ($Port -eq 5000) {
+                Write-Host "  Port $Port is in use by another process" -ForegroundColor Yellow
+                Write-Host "  Trying fallback port 5001..." -ForegroundColor Yellow
+                $connections5001 = Get-NetTCPConnection -LocalPort 5001 -State Listen -ErrorAction SilentlyContinue
+                if (-not $connections5001) {
+                    $selectedPort = 5001
+                    $portAvailable = $true
+                    Write-Host "  Port 5001 is available (fallback)" -ForegroundColor Green
+                    Write-Host "  WARNING: Frontend may need NEXT_PUBLIC_API_BASE_URL=http://localhost:5001" -ForegroundColor Yellow
+                } else {
+                    Write-Host "  ERROR: Both ports 5000 and 5001 are in use" -ForegroundColor Red
+                    Write-Host "  Please stop the processes using these ports manually:" -ForegroundColor Red
+                    Write-Host "    netstat -ano | findstr :5000" -ForegroundColor White
+                    Write-Host "    taskkill /PID <pid> /F" -ForegroundColor White
+                    exit 1
+                }
             } else {
-                Write-Host "  ERROR: Both ports 5000 and 5001 are in use" -ForegroundColor Red
-                Write-Host "  Please stop the processes using these ports manually" -ForegroundColor Red
+                Write-Host "  ERROR: Port $Port is in use" -ForegroundColor Red
                 exit 1
             }
-        } else {
-            Write-Host "  ERROR: Port $Port is in use" -ForegroundColor Red
-            exit 1
         }
     }
 } catch {
@@ -100,11 +152,27 @@ try {
     Write-Host ""
     Write-Host "Backend directory: $backendPath" -ForegroundColor Gray
     Write-Host "Project: Ticketing.Backend.csproj" -ForegroundColor Gray
-    Write-Host "URL: http://127.0.0.1:$selectedPort" -ForegroundColor White
+    Write-Host ""
+    Write-Host "=== Backend URLs ===" -ForegroundColor Cyan
+    $apiBaseUrl = "http://localhost:$selectedPort"
+    Write-Host "API Base URL: $apiBaseUrl" -ForegroundColor White
     if ($selectedPort -ne $Port) {
         Write-Host "  (Note: Port $Port was in use, using $selectedPort instead)" -ForegroundColor Yellow
+        Write-Host "  Frontend should use: NEXT_PUBLIC_API_BASE_URL=$apiBaseUrl" -ForegroundColor Yellow
     }
-    Write-Host "Swagger: http://127.0.0.1:$selectedPort/swagger" -ForegroundColor White
+    Write-Host "Swagger UI: $apiBaseUrl/swagger" -ForegroundColor White
+    Write-Host "Health Check: $apiBaseUrl/api/health" -ForegroundColor White
+    Write-Host "===================" -ForegroundColor Cyan
+    Write-Host ""
+    
+    # Write backend URL to shared file for frontend script
+    $devDir = Join-Path $repoRoot ".dev"
+    if (-not (Test-Path $devDir)) {
+        New-Item -ItemType Directory -Path $devDir -Force | Out-Null
+    }
+    $backendUrlFile = Join-Path $devDir "backend-url.txt"
+    $apiBaseUrl | Out-File -FilePath $backendUrlFile -Encoding UTF8 -NoNewline
+    Write-Host "Backend URL written to: $backendUrlFile" -ForegroundColor Gray
     Write-Host ""
     Write-Host "Press Ctrl+C to stop the server" -ForegroundColor Gray
     Write-Host ""

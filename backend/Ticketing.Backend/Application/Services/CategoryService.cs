@@ -1,4 +1,5 @@
 using System;
+using Microsoft.Extensions.Logging;
 using Ticketing.Backend.Application.DTOs;
 using Ticketing.Backend.Application.Repositories;
 using Ticketing.Backend.Domain.Entities;
@@ -22,11 +23,13 @@ public class CategoryService : ICategoryService
 {
     private readonly ICategoryRepository _repository;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly ILogger<CategoryService>? _logger;
 
-    public CategoryService(ICategoryRepository repository, IUnitOfWork unitOfWork)
+    public CategoryService(ICategoryRepository repository, IUnitOfWork unitOfWork, ILogger<CategoryService>? logger = null)
     {
         _repository = repository;
         _unitOfWork = unitOfWork;
+        _logger = logger;
     }
 
     public async Task<IEnumerable<CategoryResponse>> GetAllAsync()
@@ -42,7 +45,8 @@ public class CategoryService : ICategoryService
             CreatedAt = c.CreatedAt,
             Subcategories = c.Subcategories
                 .Where(s => s.IsActive)
-                .Select(MapSubcategoryToResponse)
+                .OrderBy(s => s.Name) // Sort by name for consistent ordering
+                .Select((s, index) => MapSubcategoryToResponse(s, c.Id, index))
         });
     }
 
@@ -63,16 +67,20 @@ public class CategoryService : ICategoryService
 
     public async Task<CategoryResponse?> CreateAsync(CategoryRequest request, IEnumerable<SubcategoryRequest>? subcategories = null)
     {
+        _logger?.LogInformation("CategoryService.CreateAsync: Starting - Name={Name}, IsActive={IsActive}", request.Name, request.IsActive);
+        
         // Check for duplicate name
         var exists = await _repository.ExistsByNameAsync(request.Name);
         if (exists)
         {
+            _logger?.LogWarning("CategoryService.CreateAsync: Duplicate name - Name={Name}", request.Name);
             throw new InvalidOperationException($"Category with name '{request.Name}' already exists");
         }
 
         var category = new Category
         {
             Name = request.Name,
+            NormalizedName = NormalizeName(request.Name),
             Description = request.Description,
             IsActive = request.IsActive,
             CreatedAt = DateTime.UtcNow,
@@ -85,8 +93,28 @@ public class CategoryService : ICategoryService
             }).ToList() ?? new List<Subcategory>()
         };
 
+        _logger?.LogInformation("CategoryService.CreateAsync: Adding to repository - Name={Name}", category.Name);
         await _repository.AddAsync(category);
-        await _unitOfWork.SaveChangesAsync();
+        
+        _logger?.LogInformation("CategoryService.CreateAsync: Calling SaveChangesAsync");
+        var savedCount = await _unitOfWork.SaveChangesAsync();
+        _logger?.LogInformation("CategoryService.CreateAsync: SaveChangesAsync returned {Count} changes, Category.Id={Id}", savedCount, category.Id);
+
+        // Verify the category was actually saved by fetching it back
+        if (category.Id == 0)
+        {
+            _logger?.LogError("CategoryService.CreateAsync: CRITICAL - Category.Id is 0 after SaveChangesAsync. Entity was not persisted!");
+            throw new InvalidOperationException("Failed to save category - entity ID not generated");
+        }
+        
+        var verifyCategory = await _repository.GetByIdAsync(category.Id);
+        if (verifyCategory == null)
+        {
+            _logger?.LogError("CategoryService.CreateAsync: CRITICAL - Category not found after SaveChangesAsync. Save may have failed silently.");
+            throw new InvalidOperationException("Failed to verify saved category - entity not found in database");
+        }
+        
+        _logger?.LogInformation("CategoryService.CreateAsync: VERIFIED - Category saved successfully. Id={Id}, Name={Name}", verifyCategory.Id, verifyCategory.Name);
 
         return MapToResponse(category);
     }
@@ -107,6 +135,7 @@ public class CategoryService : ICategoryService
         }
 
         category.Name = request.Name;
+        category.NormalizedName = NormalizeName(request.Name);
         category.Description = request.Description;
         category.IsActive = request.IsActive;
         await _repository.UpdateAsync(category);
@@ -145,14 +174,19 @@ public class CategoryService : ICategoryService
     public async Task<IEnumerable<SubcategoryResponse>> GetSubcategoriesAsync(int categoryId)
     {
         var subcategories = await _repository.GetSubcategoriesByCategoryIdAsync(categoryId);
-        return subcategories.Select(MapSubcategoryToResponse);
+        return subcategories
+            .OrderBy(s => s.Name) // Sort by name for consistent ordering
+            .Select((s, index) => MapSubcategoryToResponse(s, categoryId, index));
     }
 
     public async Task<SubcategoryResponse?> CreateSubcategoryAsync(int categoryId, SubcategoryRequest request)
     {
+        _logger?.LogInformation("CategoryService.CreateSubcategoryAsync: Starting - CategoryId={CategoryId}, Name={Name}", categoryId, request.Name);
+        
         var category = await _repository.GetByIdAsync(categoryId);
         if (category == null)
         {
+            _logger?.LogWarning("CategoryService.CreateSubcategoryAsync: Category not found - CategoryId={CategoryId}", categoryId);
             return null;
         }
 
@@ -160,6 +194,7 @@ public class CategoryService : ICategoryService
         var exists = await _repository.SubcategoryExistsByNameAsync(categoryId, request.Name);
         if (exists)
         {
+            _logger?.LogWarning("CategoryService.CreateSubcategoryAsync: Duplicate name - CategoryId={CategoryId}, Name={Name}", categoryId, request.Name);
             throw new InvalidOperationException($"Subcategory with name '{request.Name}' already exists in this category");
         }
 
@@ -172,10 +207,63 @@ public class CategoryService : ICategoryService
             CreatedAt = DateTime.UtcNow
         };
 
+        _logger?.LogInformation("CategoryService.CreateSubcategoryAsync: Adding to repository - Name={Name}", subcategory.Name);
         await _repository.AddSubcategoryAsync(subcategory);
+        
+        _logger?.LogInformation("CategoryService.CreateSubcategoryAsync: Calling first SaveChangesAsync");
+        var savedCount = await _unitOfWork.SaveChangesAsync();
+        _logger?.LogInformation("CategoryService.CreateSubcategoryAsync: SaveChangesAsync returned {Count} changes, Subcategory.Id={Id}", savedCount, subcategory.Id);
+
+        // Verify the subcategory was actually saved
+        if (subcategory.Id == 0)
+        {
+            _logger?.LogError("CategoryService.CreateSubcategoryAsync: CRITICAL - Subcategory.Id is 0 after SaveChangesAsync. Entity was not persisted!");
+            throw new InvalidOperationException("Failed to save subcategory - entity ID not generated");
+        }
+        
+        var verifySubcategory = await _repository.GetSubcategoryByIdAsync(subcategory.Id);
+        if (verifySubcategory == null)
+        {
+            _logger?.LogError("CategoryService.CreateSubcategoryAsync: CRITICAL - Subcategory not found after SaveChangesAsync. Save may have failed silently.");
+            throw new InvalidOperationException("Failed to verify saved subcategory - entity not found in database");
+        }
+        
+        _logger?.LogInformation("CategoryService.CreateSubcategoryAsync: VERIFIED - Subcategory saved successfully. Id={Id}, Name={Name}, CategoryId={CategoryId}", 
+            verifySubcategory.Id, verifySubcategory.Name, verifySubcategory.CategoryId);
+
+        // Apply category-level field templates to new subcategory
+        var categoryFields = await _unitOfWork.CategoryFieldDefinitions.GetByCategoryIdAsync(categoryId, includeInactive: true);
+        foreach (var template in categoryFields.Where(f => f.IsActive))
+        {
+            if (await _unitOfWork.FieldDefinitions.ExistsAsync(subcategory.Id, template.Key))
+            {
+                continue;
+            }
+
+            await _unitOfWork.FieldDefinitions.AddAsync(new SubcategoryFieldDefinition
+            {
+                SubcategoryId = subcategory.Id,
+                Name = template.Name,
+                Label = template.Label,
+                Key = template.Key,
+                Type = template.Type,
+                IsRequired = template.IsRequired,
+                DefaultValue = template.DefaultValue,
+                OptionsJson = template.OptionsJson,
+                Min = template.Min,
+                Max = template.Max,
+                SortOrder = template.SortOrder,
+                IsActive = template.IsActive,
+                CreatedAt = DateTime.UtcNow
+            });
+        }
         await _unitOfWork.SaveChangesAsync();
 
-        return MapSubcategoryToResponse(subcategory);
+        // Get all subcategories for this category to determine index
+        var allSubcategories = await _repository.GetSubcategoriesByCategoryIdAsync(categoryId);
+        var sortedSubcategories = allSubcategories.OrderBy(s => s.Name).ToList();
+        var index = sortedSubcategories.FindIndex(s => s.Id == subcategory.Id);
+        return MapSubcategoryToResponse(subcategory, categoryId, index >= 0 ? index : 0);
     }
 
     public async Task<SubcategoryResponse?> UpdateSubcategoryAsync(int id, SubcategoryRequest request)
@@ -199,7 +287,11 @@ public class CategoryService : ICategoryService
         await _repository.UpdateSubcategoryAsync(subcategory);
         await _unitOfWork.SaveChangesAsync();
 
-        return MapSubcategoryToResponse(subcategory);
+        // Get all subcategories for this category to determine index
+        var allSubcategories = await _repository.GetSubcategoriesByCategoryIdAsync(subcategory.CategoryId);
+        var sortedSubcategories = allSubcategories.OrderBy(s => s.Name).ToList();
+        var index = sortedSubcategories.FindIndex(s => s.Id == subcategory.Id);
+        return MapSubcategoryToResponse(subcategory, subcategory.CategoryId, index >= 0 ? index : 0);
     }
 
     public async Task<bool> DeleteSubcategoryAsync(int id)
@@ -231,15 +323,25 @@ public class CategoryService : ICategoryService
         Description = category.Description,
         IsActive = category.IsActive,
         CreatedAt = category.CreatedAt,
-        Subcategories = category.Subcategories.Select(MapSubcategoryToResponse)
+        Subcategories = category.Subcategories
+            .OrderBy(s => s.Name) // Sort by name for consistent ordering
+            .Select((s, index) => MapSubcategoryToResponse(s, category.Id, index))
     };
 
-    private static SubcategoryResponse MapSubcategoryToResponse(Subcategory subcategory) => new()
+    private static string NormalizeName(string name)
+    {
+        return name.Trim().ToUpperInvariant();
+    }
+
+    private static SubcategoryResponse MapSubcategoryToResponse(Subcategory subcategory, int categoryId, int indexWithinCategory = 0) => new()
     {
         Id = subcategory.Id,
+        CategoryId = categoryId,
         Name = subcategory.Name,
         Description = subcategory.Description,
         IsActive = subcategory.IsActive,
-        CreatedAt = subcategory.CreatedAt
+        CreatedAt = subcategory.CreatedAt,
+        SortOrder = indexWithinCategory + 1, // 1-based index for display
+        SubcategoryDisplayCode = $"{categoryId}.{indexWithinCategory + 1}"
     };
 }

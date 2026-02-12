@@ -14,9 +14,13 @@ public class User
     public string? AvatarUrl { get; set; }
     public DateTime CreatedAt { get; set; }
 
+    // Lockout fields for account security
+    public bool LockoutEnabled { get; set; } = false;
+    public DateTimeOffset? LockoutEnd { get; set; }
+    public string? SecurityStamp { get; set; }
+
     public ICollection<Ticket> TicketsCreated { get; set; } = new List<Ticket>();
     public ICollection<Ticket> TicketsAssigned { get; set; } = new List<Ticket>();
     public ICollection<TicketMessage> Messages { get; set; } = new List<TicketMessage>();
-    public ICollection<Notification> Notifications { get; set; } = new List<Notification>();
     public UserPreferences? Preferences { get; set; }
 }

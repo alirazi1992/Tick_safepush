@@ -14,5 +14,6 @@ public class Technician
     // Navigation properties
     public User? User { get; set; }
     public ICollection<Ticket> AssignedTickets { get; set; } = new List<Ticket>();
+    public ICollection<TechnicianSubcategoryPermission> SubcategoryPermissions { get; set; } = new List<TechnicianSubcategoryPermission>();
 }
 

@@ -7,7 +7,8 @@ export interface FieldOption {
 
 export interface FieldDefinitionResponse {
   id: number;
-  subcategoryId: number;
+  categoryId?: number | null;
+  subcategoryId?: number | null;
   name: string;
   label: string;
   key: string;
@@ -17,6 +18,9 @@ export interface FieldDefinitionResponse {
   options?: FieldOption[];
   min?: number;
   max?: number;
+  displayOrder?: number;
+  isActive?: boolean;
+  scopeType?: "Category" | "Subcategory";
 }
 
 export interface CreateFieldDefinitionRequest {
@@ -29,15 +33,17 @@ export interface CreateFieldDefinitionRequest {
   options?: FieldOption[];
   min?: number;
   max?: number;
+  displayOrder?: number;
 }
 
+// Admin endpoint (requires admin role)
 export async function getFieldDefinitions(
   token: string,
   subcategoryId: number
 ): Promise<FieldDefinitionResponse[]> {
   try {
     return await apiRequest<FieldDefinitionResponse[]>(
-      `/api/admin/subcategories/${subcategoryId}/fields`,
+      `/admin/subcategories/${subcategoryId}/fields`,
       {
         method: "GET",
         token,
@@ -73,13 +79,70 @@ export async function getFieldDefinitions(
   }
 }
 
+export async function getCategoryFieldDefinitions(
+  token: string,
+  categoryId: number
+): Promise<FieldDefinitionResponse[]> {
+  return await apiRequest<FieldDefinitionResponse[]>(
+    `/admin/categories/${categoryId}/fields`,
+    {
+      method: "GET",
+      token,
+      silent: false,
+    }
+  );
+}
+
+// Client-safe endpoint (any authenticated user can read active fields)
+export async function getClientFieldDefinitions(
+  token: string,
+  subcategoryId: number
+): Promise<FieldDefinitionResponse[]> {
+  try {
+    return await apiRequest<FieldDefinitionResponse[]>(
+      `/subcategories/${subcategoryId}/fields`,
+      {
+        method: "GET",
+        token,
+        silent: false,
+        // Use no-store to ensure fresh data (admin might have just added fields)
+      } as any
+    );
+  } catch (error: any) {
+    // Handle 404 as empty list (no fields defined yet)
+    if (error?.status === 404) {
+      console.log(`[getClientFieldDefinitions] 404 for subcategory ${subcategoryId} - returning empty list`);
+      return [];
+    }
+    // For other errors, log and return empty list (don't break the form)
+    console.warn(`[getClientFieldDefinitions] Error for subcategory ${subcategoryId}:`, error);
+    return [];
+  }
+}
+
 export async function createFieldDefinition(
   token: string,
   subcategoryId: number,
   request: CreateFieldDefinitionRequest
 ): Promise<FieldDefinitionResponse> {
   return await apiRequest<FieldDefinitionResponse>(
-    `/api/admin/subcategories/${subcategoryId}/fields`,
+    `/admin/subcategories/${subcategoryId}/fields`,
+    {
+      method: "POST",
+      token,
+      body: request,
+      silent: false,
+    }
+  );
+}
+
+export async function createCategoryFieldDefinition(
+  token: string,
+  categoryId: number,
+  request: CreateFieldDefinitionRequest
+): Promise<FieldDefinitionResponse> {
+  return await apiRequest<FieldDefinitionResponse>(
+    `/admin/categories/${categoryId}/fields`,
     {
       method: "POST",
       token,
@@ -96,7 +159,24 @@ export async function updateFieldDefinition(
   request: Partial<CreateFieldDefinitionRequest>
 ): Promise<FieldDefinitionResponse> {
   return await apiRequest<FieldDefinitionResponse>(
-    `/api/admin/subcategories/${subcategoryId}/fields/${fieldId}`,
+    `/admin/subcategories/${subcategoryId}/fields/${fieldId}`,
+    {
+      method: "PUT",
+      token,
+      body: request,
+      silent: false,
+    }
+  );
+}
+
+export async function updateCategoryFieldDefinition(
+  token: string,
+  categoryId: number,
+  fieldId: number,
+  request: Partial<CreateFieldDefinitionRequest>
+): Promise<FieldDefinitionResponse> {
+  return await apiRequest<FieldDefinitionResponse>(
+    `/admin/categories/${categoryId}/fields/${fieldId}`,
     {
       method: "PUT",
       token,
@@ -112,11 +192,45 @@ export async function deleteFieldDefinition(
   fieldId: number
 ): Promise<void> {
   return await apiRequest<void>(
-    `/api/admin/subcategories/${subcategoryId}/fields/${fieldId}`,
+    `/admin/subcategories/${subcategoryId}/fields/${fieldId}`,
     {
       method: "DELETE",
       token,
       silent: false,
     }
   );
+}
+
+export async function deleteCategoryFieldDefinition(
+  token: string,
+  categoryId: number,
+  fieldId: number
+): Promise<void> {
+  return await apiRequest<void>(
+    `/admin/categories/${categoryId}/fields/${fieldId}`,
+    {
+      method: "DELETE",
+      token,
+      silent: false,
+    }
+  );
+}
+
+export async function getEffectiveFieldDefinitions(
+  token: string,
+  categoryId: number,
+  subcategoryId?: number | null
+): Promise<FieldDefinitionResponse[]> {
+  const params = new URLSearchParams({ categoryId: String(categoryId) })
+  if (subcategoryId) {
+    params.set("subcategoryId", String(subcategoryId))
+  }
+  return await apiRequest<FieldDefinitionResponse[]>(
+    `/tickets/field-definitions?${params.toString()}`,
+    {
+      method: "GET",
+      token,
+      silent: false,
+    }
+  )
 }

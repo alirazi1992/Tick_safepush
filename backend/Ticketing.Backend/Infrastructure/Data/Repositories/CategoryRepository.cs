@@ -91,12 +91,14 @@ public class CategoryRepository : ICategoryRepository
 
     public async Task<bool> ExistsByNameAsync(string name)
     {
-        return await _context.Categories.AnyAsync(c => c.Name == name);
+        var normalized = name.Trim().ToUpperInvariant();
+        return await _context.Categories.AnyAsync(c => c.NormalizedName == normalized);
     }
 
     public async Task<bool> ExistsByNameExcludingIdAsync(string name, int excludeId)
     {
-        return await _context.Categories.AnyAsync(c => c.Name == name && c.Id != excludeId);
+        var normalized = name.Trim().ToUpperInvariant();
+        return await _context.Categories.AnyAsync(c => c.NormalizedName == normalized && c.Id != excludeId);
     }
 
     public async Task<bool> SubcategoryExistsByNameAsync(int categoryId, string name)

@@ -785,7 +785,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden" dir="rtl">
+      <DialogContent className="max-h-[85vh] overflow-y-auto w-[95vw] sm:w-[90vw] md:max-w-4xl" dir="rtl">
         <DialogHeader className="text-right">
           <DialogTitle className="text-right flex items-center gap-2 justify-end">
             <Settings className="w-5 h-5" />

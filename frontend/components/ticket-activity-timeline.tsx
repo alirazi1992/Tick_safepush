@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Clock, MessageSquare, UserPlus, CheckCircle, XCircle } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
+import { toFaDateTime } from "@/lib/datetime"
 import { getTicketActivities } from "@/lib/tickets-api"
 import type { ApiTicketActivityDto } from "@/lib/api-types"
 
@@ -50,17 +51,6 @@ export function TicketActivityTimeline({ ticketId }: TicketActivityTimelineProps
     }
   }
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString)
-    return date.toLocaleString("fa-IR", {
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    })
-  }
-
   if (loading) {
     return <div className="text-sm text-muted-foreground">در حال بارگذاری...</div>
   }
@@ -90,7 +80,7 @@ export function TicketActivityTimeline({ ticketId }: TicketActivityTimelineProps
                       </Badge>
                     </div>
                     <p className="text-sm text-muted-foreground mb-1">{activity.message}</p>
-                    <p className="text-xs text-muted-foreground">{formatDate(activity.createdAt)}</p>
+                    <p className="text-xs text-muted-foreground">{toFaDateTime(activity.createdAt)}</p>
                   </div>
                 </div>
               </CardContent>

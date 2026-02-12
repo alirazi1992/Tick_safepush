@@ -1,17 +1,43 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Security.Claims;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Ticketing.Backend.Domain.Enums;
+using Ticketing.Backend.Api.Serialization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authentication.Negotiate;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
+using Microsoft.Extensions.Options;
+using Ticketing.Backend.Application.Common;
 using Ticketing.Backend.Application.Services;
+using Ticketing.Backend.Api.Middleware;
 using Ticketing.Backend.Domain.Entities;
 using Ticketing.Backend.Infrastructure.Auth;
 using Ticketing.Backend.Infrastructure.Data;
+using Ticketing.Backend.Infrastructure.Data.Repositories;
+using Ticketing.Backend.Infrastructure.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+const string CorsPolicyName = "DevCors";
+
+// =======================
+// Configure URL/Port for local dev
+// =======================
+// Ensure backend listens on http://localhost:5000 for local development
+// This can be overridden via ASPNETCORE_URLS environment variable
+if (string.IsNullOrWhiteSpace(builder.Configuration["ASPNETCORE_URLS"]) && 
+    builder.Environment.IsDevelopment())
+{
+    builder.WebHost.UseUrls("http://localhost:5000");
+}
 
 // =======================
 // JWT configuration
@@ -27,6 +53,9 @@ if (string.IsNullOrWhiteSpace(jwtSettings.Secret))
 }
 
 builder.Services.AddSingleton(jwtSettings);
+builder.Services.AddMemoryCache();
+builder.Services.Configure<HybridAuthOptions>(builder.Configuration.GetSection("Authentication"));
+builder.Services.Configure<BossDbOptions>(builder.Configuration.GetSection("BossDb"));
 
 // =======================
 // DbContext (SQLite) - DETERMINISTIC PATH
@@ -124,11 +153,52 @@ static async Task EnsureSubcategoryFieldDefinitionsSchemaAsync(
         if (!tableExists)
         {
             logger.LogWarning("[SCHEMA_GUARD] Table SubcategoryFieldDefinitions does not exist. Migrations should have created it.");
+            logger.LogWarning("[SCHEMA_GUARD] Attempting to create table with correct schema...");
+            
+            // Create the table with all required columns
+            var createTableSql = @"
+                CREATE TABLE IF NOT EXISTS SubcategoryFieldDefinitions (
+                    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    SubcategoryId INTEGER NOT NULL,
+                    Name TEXT NOT NULL,
+                    Label TEXT NOT NULL,
+                    Key TEXT NOT NULL,
+                    Type TEXT NOT NULL,
+                    IsRequired INTEGER NOT NULL DEFAULT 0,
+                    DefaultValue TEXT,
+                    OptionsJson TEXT,
+                    Min REAL,
+                    Max REAL
+                );
+            ";
+            
+            try
+            {
+                await context.Database.ExecuteSqlRawAsync(createTableSql);
+                logger.LogInformation("[SCHEMA_GUARD] Successfully created SubcategoryFieldDefinitions table");
+                
+                // Create indexes
+                await context.Database.ExecuteSqlRawAsync(@"
+                    CREATE INDEX IF NOT EXISTS IX_SubcategoryFieldDefinitions_SubcategoryId 
+                    ON SubcategoryFieldDefinitions(SubcategoryId);
+                ");
+                await context.Database.ExecuteSqlRawAsync(@"
+                    CREATE UNIQUE INDEX IF NOT EXISTS IX_SubcategoryFieldDefinitions_SubcategoryId_Key 
+                    ON SubcategoryFieldDefinitions(SubcategoryId, Key);
+                ");
+                
+                logger.LogInformation("[SCHEMA_GUARD] Created indexes for SubcategoryFieldDefinitions table");
+            }
+            catch (Exception createEx)
+            {
+                logger.LogError(createEx, "[SCHEMA_GUARD] Failed to create SubcategoryFieldDefinitions table: {Error}", createEx.Message);
+            }
+            
             if (!wasOpen)
             {
                 await connection.CloseAsync();
             }
-            return; // Table will be created by migrations, schema guard only fixes existing tables
+            return;
         }
         
         var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -145,12 +215,229 @@ static async Task EnsureSubcategoryFieldDefinitionsSchemaAsync(
             }
         }
 
-        if (!wasOpen)
+        logger.LogInformation("[SCHEMA_GUARD] Existing columns: {Columns}", string.Join(", ", columns));
+
+        // Check for critical required columns and add them additively (NO table recreation)
+        // Critical columns that must exist for the table to function
+        var criticalColumns = new Dictionary<string, string>
         {
-            await connection.CloseAsync();
+            { "Name", "TEXT" },
+            { "Label", "TEXT" },
+            { "Key", "TEXT" },
+            { "Type", "TEXT" },
+            { "IsRequired", "INTEGER" },
+            { "SubcategoryId", "INTEGER" }
+        };
+        
+        var missingCritical = criticalColumns.Where(c => !columns.Contains(c.Key)).ToList();
+        if (missingCritical.Any())
+        {
+            logger.LogWarning("[SCHEMA_GUARD] Missing critical columns detected: {MissingColumns}", 
+                string.Join(", ", missingCritical.Select(c => c.Key)));
+            logger.LogWarning("[SCHEMA_GUARD] Applying additive schema fixes (ALTER TABLE ADD COLUMN)...");
+            
+            // Backup database before making schema changes
+            if (File.Exists(dbPath))
+            {
+                var backupPath = $"{dbPath}.backup.{DateTime.UtcNow:yyyyMMddHHmmss}";
+                try
+                {
+                    File.Copy(dbPath, backupPath, overwrite: true);
+                    logger.LogInformation("[SCHEMA_GUARD] Database backed up to: {BackupPath}", backupPath);
+                }
+                catch (Exception backupEx)
+                {
+                    logger.LogWarning(backupEx, "[SCHEMA_GUARD] Failed to create backup: {Error}", backupEx.Message);
+                }
+            }
+            
+            // Add missing critical columns additively
+            foreach (var missing in missingCritical)
+            {
+                try
+                {
+                    var columnDef = missing.Value;
+                    var columnName = missing.Key;
+                    
+                    // For NOT NULL columns, we need to add as nullable first, then backfill
+                    var isNotNull = columnName == "Name" || columnName == "Label" || columnName == "Key" || 
+                                   columnName == "Type" || columnName == "SubcategoryId" || columnName == "IsRequired";
+                    
+                    if (isNotNull && (columnName == "Name" || columnName == "Label" || columnName == "Key"))
+                    {
+                        // Add as nullable first
+                        var addColumnSql = $"ALTER TABLE SubcategoryFieldDefinitions ADD COLUMN {columnName} {columnDef};";
+                        using (var addCommand = connection.CreateCommand())
+                        {
+                            addCommand.CommandText = addColumnSql;
+                            await addCommand.ExecuteNonQueryAsync();
+                        }
+                        logger.LogInformation("[SCHEMA_GUARD] Added column {Column} as nullable", columnName);
+                        
+                        // Backfill: for Name/Label, use Key as default; for Key, use empty string
+                        string backfillValue = columnName == "Key" ? "''" : "Key";
+                        var backfillSql = $"UPDATE SubcategoryFieldDefinitions SET {columnName} = {backfillValue} WHERE {columnName} IS NULL;";
+                        using (var backfillCommand = connection.CreateCommand())
+                        {
+                            backfillCommand.CommandText = backfillSql;
+                            var rowsAffected = await backfillCommand.ExecuteNonQueryAsync();
+                            logger.LogInformation("[SCHEMA_GUARD] Backfilled {Column}: {RowsAffected} rows updated", columnName, rowsAffected);
+                        }
+                    }
+                    else if (isNotNull && columnName == "Type")
+                    {
+                        // Add Type column with default 'Text'
+                        var addColumnSql = $"ALTER TABLE SubcategoryFieldDefinitions ADD COLUMN {columnName} {columnDef} DEFAULT 'Text';";
+                        using (var addCommand = connection.CreateCommand())
+                        {
+                            addCommand.CommandText = addColumnSql;
+                            await addCommand.ExecuteNonQueryAsync();
+                        }
+                        logger.LogInformation("[SCHEMA_GUARD] Added column {Column} with default value", columnName);
+                    }
+                    else if (isNotNull && columnName == "IsRequired")
+                    {
+                        // Check if column already exists
+                        bool columnExists = columns.Contains(columnName);
+                        
+                        if (!columnExists)
+                        {
+                            // Column doesn't exist - add with default
+                            // Note: SQLite doesn't support NOT NULL in ALTER TABLE ADD COLUMN for existing tables with data
+                            // So we add as nullable first, then backfill, then rely on application-level defaults
+                            var addColumnSql = $"ALTER TABLE SubcategoryFieldDefinitions ADD COLUMN {columnName} {columnDef} DEFAULT 0;";
+                            using (var addCommand = connection.CreateCommand())
+                            {
+                                addCommand.CommandText = addColumnSql;
+                                await addCommand.ExecuteNonQueryAsync();
+                            }
+                            logger.LogInformation("[SCHEMA_GUARD] Added column {Column} with DEFAULT 0", columnName);
+                            
+                            // Backfill any existing NULL values (shouldn't be any if table is empty, but be safe)
+                            var backfillSql = $"UPDATE SubcategoryFieldDefinitions SET {columnName} = 0 WHERE {columnName} IS NULL;";
+                            using (var backfillCommand = connection.CreateCommand())
+                            {
+                                backfillCommand.CommandText = backfillSql;
+                                var rowsAffected = await backfillCommand.ExecuteNonQueryAsync();
+                                if (rowsAffected > 0)
+                                {
+                                    logger.LogInformation("[SCHEMA_GUARD] Backfilled {Column}: {RowsAffected} rows updated", columnName, rowsAffected);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            // Column exists - ensure it has no NULLs
+                            logger.LogInformation("[SCHEMA_GUARD] Column {Column} already exists, verifying no NULL values...", columnName);
+                            
+                            // Backfill any NULL values
+                            var backfillSql = $"UPDATE SubcategoryFieldDefinitions SET {columnName} = 0 WHERE {columnName} IS NULL;";
+                            using (var backfillCommand = connection.CreateCommand())
+                            {
+                                backfillCommand.CommandText = backfillSql;
+                                var rowsAffected = await backfillCommand.ExecuteNonQueryAsync();
+                                if (rowsAffected > 0)
+                                {
+                                    logger.LogInformation("[SCHEMA_GUARD] Backfilled {Column}: {RowsAffected} rows updated", columnName, rowsAffected);
+                                }
+                                else
+                                {
+                                    logger.LogInformation("[SCHEMA_GUARD] Column {Column} has no NULL values", columnName);
+                                }
+                            }
+                            
+                            // Note: SQLite doesn't support ALTER COLUMN to add/modify DEFAULT
+                            // EF Core's HasDefaultValue(false) configuration should ensure new inserts have a value
+                            // If the column was created without a default, EF Core will use the configured default
+                        }
+                    }
+                    else if (isNotNull && columnName == "SubcategoryId")
+                    {
+                        // SubcategoryId should already exist, but if missing, we can't add it safely
+                        logger.LogError("[SCHEMA_GUARD] Cannot add SubcategoryId column - table structure is severely broken");
+                        throw new InvalidOperationException("SubcategoryId column is missing - table structure is broken beyond repair");
+                    }
+                    else
+                    {
+                        // Nullable column - add directly
+                        var addColumnSql = $"ALTER TABLE SubcategoryFieldDefinitions ADD COLUMN {columnName} {columnDef};";
+                        using (var addCommand = connection.CreateCommand())
+                        {
+                            addCommand.CommandText = addColumnSql;
+                            await addCommand.ExecuteNonQueryAsync();
+                        }
+                        logger.LogInformation("[SCHEMA_GUARD] Added nullable column {Column}", columnName);
+                    }
+                }
+                catch (Exception addEx)
+                {
+                    if (addEx.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase) ||
+                        addEx.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+                    {
+                        logger.LogInformation("[SCHEMA_GUARD] Column {Column} already exists (possibly added concurrently)", missing.Key);
+                    }
+                    else
+                    {
+                        logger.LogError(addEx, "[SCHEMA_GUARD] Failed to add column {Column}: {Error}", missing.Key, addEx.Message);
+                        throw; // Re-throw for critical columns
+                    }
+                }
+            }
+            
+            logger.LogInformation("[SCHEMA_GUARD] Successfully added all missing critical columns");
+            
+            // Re-read columns after adding to verify
+            columns.Clear();
+            using (var verifyCommand = connection.CreateCommand())
+            {
+                verifyCommand.CommandText = "PRAGMA table_info(SubcategoryFieldDefinitions)";
+                using (var reader = await verifyCommand.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        var columnName = reader.GetString(1);
+                        columns.Add(columnName);
+                    }
+                }
+            }
+            logger.LogInformation("[SCHEMA_GUARD] After fixes, table has columns: {Columns}", string.Join(", ", columns));
         }
 
-        logger.LogInformation("[SCHEMA_GUARD] Existing columns: {Columns}", string.Join(", ", columns));
+        // After fixing critical columns, ensure IsRequired column is properly configured
+        // SQLite doesn't support ALTER COLUMN to modify defaults, so we need to ensure
+        // the column exists with a default, and backfill any NULLs
+        if (columns.Contains("IsRequired"))
+        {
+            try
+            {
+                // Check for NULL values and backfill
+                var nullCheckSql = "SELECT COUNT(*) FROM SubcategoryFieldDefinitions WHERE IsRequired IS NULL;";
+                using (var nullCheckCommand = connection.CreateCommand())
+                {
+                    nullCheckCommand.CommandText = nullCheckSql;
+                    var nullCount = Convert.ToInt32(await nullCheckCommand.ExecuteScalarAsync());
+                    if (nullCount > 0)
+                    {
+                        logger.LogWarning("[SCHEMA_GUARD] Found {Count} rows with NULL IsRequired, backfilling...", nullCount);
+                        var backfillSql = "UPDATE SubcategoryFieldDefinitions SET IsRequired = 0 WHERE IsRequired IS NULL;";
+                        using (var backfillCommand = connection.CreateCommand())
+                        {
+                            backfillCommand.CommandText = backfillSql;
+                            var rowsAffected = await backfillCommand.ExecuteNonQueryAsync();
+                            logger.LogInformation("[SCHEMA_GUARD] Backfilled IsRequired: {RowsAffected} rows updated", rowsAffected);
+                        }
+                    }
+                }
+                
+                // Verify column definition - check if it has a default
+                // Note: SQLite PRAGMA table_info doesn't show defaults reliably, but we can check constraints
+                logger.LogInformation("[SCHEMA_GUARD] IsRequired column exists and has been verified/backfilled");
+            }
+            catch (Exception backfillEx)
+            {
+                logger.LogWarning(backfillEx, "[SCHEMA_GUARD] Error checking/backfilling IsRequired: {Error}", backfillEx.Message);
+            }
+        }
 
         // Required columns with their SQL definitions (only nullable ones can be safely added)
         var requiredColumns = new Dictionary<string, string>
@@ -173,6 +460,12 @@ static async Task EnsureSubcategoryFieldDefinitionsSchemaAsync(
         if (missingColumns.Count == 0)
         {
             logger.LogInformation("[SCHEMA_GUARD] All required columns exist - schema is valid");
+            
+            // Close connection if we opened it
+            if (!wasOpen)
+            {
+                await connection.CloseAsync();
+            }
             return;
         }
 
@@ -236,6 +529,741 @@ static async Task EnsureSubcategoryFieldDefinitionsSchemaAsync(
 }
 
 // =======================
+// Schema Guard: Ensures Subcategories table exists (required for foreign key)
+// =======================
+static async Task EnsureSubcategoriesTableExistsAsync(
+    AppDbContext context,
+    ILogger logger,
+    string dbPath)
+{
+    try
+    {
+        logger.LogInformation("[SCHEMA_GUARD] Verifying Subcategories table exists...");
+        
+        var connection = context.Database.GetDbConnection();
+        var wasOpen = connection.State == System.Data.ConnectionState.Open;
+        
+        if (!wasOpen)
+        {
+            await connection.OpenAsync();
+        }
+        
+        // Check if Subcategories table exists
+        bool tableExists = false;
+        using (var checkTableCommand = connection.CreateCommand())
+        {
+            checkTableCommand.CommandText = @"
+                SELECT name FROM sqlite_master 
+                WHERE type='table' AND name='Subcategories';
+            ";
+            var result = await checkTableCommand.ExecuteScalarAsync();
+            tableExists = result != null;
+        }
+        
+        if (!tableExists)
+        {
+            logger.LogWarning("[SCHEMA_GUARD] Subcategories table does not exist. This table is required for SubcategoryFieldDefinitions foreign key.");
+            logger.LogWarning("[SCHEMA_GUARD] The table should be created by the InitialCreate migration.");
+            logger.LogWarning("[SCHEMA_GUARD] Please ensure all migrations are applied correctly.");
+        }
+        else
+        {
+            // Verify Name column exists
+            var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = "PRAGMA table_info(Subcategories)";
+                using (var reader = await command.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        var columnName = reader.GetString(1);
+                        columns.Add(columnName);
+                    }
+                }
+            }
+            
+            if (!columns.Contains("Name"))
+            {
+                logger.LogError("[SCHEMA_GUARD] Subcategories table exists but is missing 'Name' column!");
+                logger.LogError("[SCHEMA_GUARD] This will cause foreign key validation to fail.");
+            }
+            else
+            {
+                logger.LogInformation("[SCHEMA_GUARD] Subcategories table exists with required columns");
+            }
+        }
+        
+        if (!wasOpen)
+        {
+            await connection.CloseAsync();
+        }
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "[SCHEMA_GUARD] Error checking Subcategories table: {Error}", ex.Message);
+    }
+}
+
+// =======================
+// Schema Guard: Ensures TicketTechnicianAssignments table exists
+// =======================
+static async Task EnsureTicketTechnicianAssignmentsTableExistsAsync(
+    AppDbContext context,
+    ILogger logger,
+    string dbPath)
+{
+    try
+    {
+        logger.LogInformation("[SCHEMA_GUARD] Verifying TicketTechnicianAssignments table exists...");
+        
+        var connection = context.Database.GetDbConnection();
+        var wasOpen = connection.State == System.Data.ConnectionState.Open;
+        
+        if (!wasOpen)
+        {
+            await connection.OpenAsync();
+        }
+        
+        // Check if TicketTechnicianAssignments table exists
+        bool tableExists = false;
+        using (var checkTableCommand = connection.CreateCommand())
+        {
+            checkTableCommand.CommandText = @"
+                SELECT name FROM sqlite_master 
+                WHERE type='table' AND name='TicketTechnicianAssignments';
+            ";
+            var result = await checkTableCommand.ExecuteScalarAsync();
+            tableExists = result != null;
+        }
+        
+        if (!tableExists)
+        {
+            logger.LogWarning("[SCHEMA_GUARD] TicketTechnicianAssignments table does not exist. Creating it...");
+            
+            // Backup database before making schema changes
+            if (File.Exists(dbPath))
+            {
+                var backupPath = $"{dbPath}.backup.{DateTime.UtcNow:yyyyMMddHHmmss}";
+                try
+                {
+                    File.Copy(dbPath, backupPath, overwrite: true);
+                    logger.LogInformation("[SCHEMA_GUARD] Database backed up to: {BackupPath}", backupPath);
+                }
+                catch (Exception backupEx)
+                {
+                    logger.LogWarning(backupEx, "[SCHEMA_GUARD] Failed to create backup: {Error}", backupEx.Message);
+                }
+            }
+            
+            // Create the table with the exact schema from the migration (including AcceptedAt)
+            var createTableSql = @"
+                CREATE TABLE TicketTechnicianAssignments (
+                    Id TEXT NOT NULL PRIMARY KEY,
+                    TicketId TEXT NOT NULL,
+                    TechnicianUserId TEXT NOT NULL,
+                    TechnicianId TEXT,
+                    AssignedAt TEXT NOT NULL,
+                    AssignedByUserId TEXT NOT NULL,
+                    AcceptedAt TEXT,
+                    IsActive INTEGER NOT NULL DEFAULT 1,
+                    Role TEXT,
+                    UpdatedAt TEXT,
+                    FOREIGN KEY (TicketId) REFERENCES Tickets(Id) ON DELETE CASCADE,
+                    FOREIGN KEY (TechnicianUserId) REFERENCES Users(Id) ON DELETE RESTRICT,
+                    FOREIGN KEY (AssignedByUserId) REFERENCES Users(Id) ON DELETE RESTRICT,
+                    FOREIGN KEY (TechnicianId) REFERENCES Technicians(Id) ON DELETE SET NULL
+                );
+                
+                CREATE INDEX IX_TicketTechnicianAssignments_TicketId ON TicketTechnicianAssignments(TicketId);
+                CREATE INDEX IX_TicketTechnicianAssignments_TechnicianUserId ON TicketTechnicianAssignments(TechnicianUserId);
+                CREATE INDEX IX_TicketTechnicianAssignments_TicketId_TechnicianUserId_IsActive ON TicketTechnicianAssignments(TicketId, TechnicianUserId, IsActive);
+            ";
+            
+            try
+            {
+                await context.Database.ExecuteSqlRawAsync(createTableSql);
+                logger.LogInformation("[SCHEMA_GUARD] Successfully created TicketTechnicianAssignments table");
+            }
+            catch (Exception createEx)
+            {
+                logger.LogError(createEx, "[SCHEMA_GUARD] Failed to create TicketTechnicianAssignments table: {Error}", createEx.Message);
+                throw;
+            }
+        }
+        else
+        {
+            logger.LogInformation("[SCHEMA_GUARD] TicketTechnicianAssignments table exists");
+            // Ensure AcceptedAt column exists (migration 20260210000000 or schema drift)
+            bool hasAcceptedAt = false;
+            using (var pragmaCmd = connection.CreateCommand())
+            {
+                pragmaCmd.CommandText = "PRAGMA table_info(TicketTechnicianAssignments);";
+                using var reader = await pragmaCmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    var name = reader.GetString(1);
+                    if (string.Equals(name, "AcceptedAt", StringComparison.OrdinalIgnoreCase))
+                    {
+                        hasAcceptedAt = true;
+                        break;
+                    }
+                }
+            }
+            if (!hasAcceptedAt)
+            {
+                logger.LogWarning("[SCHEMA_GUARD] TicketTechnicianAssignments missing AcceptedAt column. Adding it (ALTER TABLE).");
+                using (var alterCmd = connection.CreateCommand())
+                {
+                    alterCmd.CommandText = "ALTER TABLE TicketTechnicianAssignments ADD COLUMN AcceptedAt TEXT;";
+                    await alterCmd.ExecuteNonQueryAsync();
+                }
+                logger.LogInformation("[SCHEMA_GUARD] Successfully added AcceptedAt column to TicketTechnicianAssignments");
+            }
+        }
+        
+        if (!wasOpen)
+        {
+            await connection.CloseAsync();
+        }
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "[SCHEMA_GUARD] Error checking TicketTechnicianAssignments table: {Error}", ex.Message);
+    }
+}
+
+static async Task EnsureTicketActivityEventsTableExistsAsync(AppDbContext context, ILogger logger)
+{
+    try
+    {
+        var connection = context.Database.GetDbConnection();
+        var wasOpen = connection.State == System.Data.ConnectionState.Open;
+        if (!wasOpen)
+        {
+            await connection.OpenAsync();
+        }
+
+        var command = connection.CreateCommand();
+        command.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND name='TicketActivityEvents';";
+        var result = await command.ExecuteScalarAsync();
+        var tableExists = result != null && result.ToString() == "TicketActivityEvents";
+
+        if (!tableExists)
+        {
+            logger.LogWarning("[SCHEMA_GUARD] TicketActivityEvents table does not exist. Creating it...");
+            
+            var dbPath = context.Database.GetConnectionString()?.Replace("Data Source=", "").Trim();
+            if (string.IsNullOrEmpty(dbPath))
+            {
+                dbPath = Path.Combine(Directory.GetCurrentDirectory(), "App_Data", "ticketing.db");
+            }
+            
+            // Backup database before making schema changes
+            if (File.Exists(dbPath))
+            {
+                var backupPath = $"{dbPath}.backup.{DateTime.UtcNow:yyyyMMddHHmmss}";
+                try
+                {
+                    File.Copy(dbPath, backupPath, overwrite: true);
+                    logger.LogInformation("[SCHEMA_GUARD] Database backed up to: {BackupPath}", backupPath);
+                }
+                catch (Exception backupEx)
+                {
+                    logger.LogWarning(backupEx, "[SCHEMA_GUARD] Failed to create backup: {Error}", backupEx.Message);
+                }
+            }
+            
+            // Create the table with the exact schema from the migration
+            var createTableSql = @"
+                CREATE TABLE TicketActivityEvents (
+                    Id TEXT NOT NULL PRIMARY KEY,
+                    TicketId TEXT NOT NULL,
+                    ActorUserId TEXT NOT NULL,
+                    ActorRole TEXT NOT NULL,
+                    EventType TEXT NOT NULL,
+                    OldStatus TEXT,
+                    NewStatus TEXT,
+                    MetadataJson TEXT,
+                    CreatedAt TEXT NOT NULL,
+                    FOREIGN KEY (TicketId) REFERENCES Tickets(Id) ON DELETE CASCADE,
+                    FOREIGN KEY (ActorUserId) REFERENCES Users(Id) ON DELETE RESTRICT
+                );
+                
+                CREATE INDEX IX_TicketActivityEvents_TicketId ON TicketActivityEvents(TicketId);
+                CREATE INDEX IX_TicketActivityEvents_CreatedAt ON TicketActivityEvents(CreatedAt);
+                CREATE INDEX IX_TicketActivityEvents_TicketId_CreatedAt ON TicketActivityEvents(TicketId, CreatedAt);
+            ";
+            
+            try
+            {
+                await context.Database.ExecuteSqlRawAsync(createTableSql);
+                logger.LogInformation("[SCHEMA_GUARD] Successfully created TicketActivityEvents table");
+            }
+            catch (Exception createEx)
+            {
+                logger.LogError(createEx, "[SCHEMA_GUARD] Failed to create TicketActivityEvents table: {Error}", createEx.Message);
+                throw;
+            }
+        }
+        else
+        {
+            logger.LogInformation("[SCHEMA_GUARD] TicketActivityEvents table exists");
+        }
+        
+        if (!wasOpen)
+        {
+            await connection.CloseAsync();
+        }
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "[SCHEMA_GUARD] Error checking TicketActivityEvents table: {Error}", ex.Message);
+    }
+}
+
+// =======================
+// Schema Guard: Ensure ClaimedAtUtc columns exist (dev + SQLite only)
+// =======================
+static async Task EnsureClaimedAtUtcColumnsExistAsync(
+    AppDbContext context,
+    ILogger logger)
+{
+    try
+    {
+        logger.LogInformation("[SCHEMA_GUARD] Checking ClaimedAtUtc columns on Tickets and TicketTechnicianAssignments...");
+
+        var connection = context.Database.GetDbConnection();
+        var wasOpen = connection.State == System.Data.ConnectionState.Open;
+
+        if (!wasOpen)
+        {
+            await connection.OpenAsync();
+        }
+
+        async Task<bool> TableExistsAsync(string tableName)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = @"
+                SELECT name FROM sqlite_master 
+                WHERE type='table' AND name=$tableName;
+            ";
+            var param = command.CreateParameter();
+            param.ParameterName = "$tableName";
+            param.Value = tableName;
+            command.Parameters.Add(param);
+            var result = await command.ExecuteScalarAsync();
+            return result != null;
+        }
+
+        async Task<HashSet<string>> GetColumnsAsync(string tableName)
+        {
+            var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using var command = connection.CreateCommand();
+            command.CommandText = $"PRAGMA table_info('{tableName}')";
+            using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                var columnName = reader.GetString(1);
+                columns.Add(columnName);
+            }
+            return columns;
+        }
+
+        async Task EnsureColumnAsync(string tableName)
+        {
+            if (!await TableExistsAsync(tableName))
+            {
+                logger.LogWarning("[SCHEMA_GUARD] Table {Table} does not exist. Skipping ClaimedAtUtc guard.", tableName);
+                return;
+            }
+
+            var columns = await GetColumnsAsync(tableName);
+            if (columns.Contains("ClaimedAtUtc"))
+            {
+                logger.LogInformation("[SCHEMA_GUARD] {Table}.ClaimedAtUtc already exists.", tableName);
+                return;
+            }
+
+            logger.LogWarning("[SCHEMA_GUARD] {Table}.ClaimedAtUtc missing. Adding column...", tableName);
+            try
+            {
+                using var alter = connection.CreateCommand();
+                alter.CommandText = $"ALTER TABLE {tableName} ADD COLUMN ClaimedAtUtc TEXT NULL;";
+                await alter.ExecuteNonQueryAsync();
+                logger.LogInformation("[SCHEMA_GUARD] Added {Table}.ClaimedAtUtc column.", tableName);
+            }
+            catch (Exception addEx)
+            {
+                if (addEx.Message.Contains("duplicate column", StringComparison.OrdinalIgnoreCase) ||
+                    addEx.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+                {
+                    logger.LogInformation("[SCHEMA_GUARD] {Table}.ClaimedAtUtc already exists (race condition).", tableName);
+                }
+                else
+                {
+                    logger.LogWarning(addEx, "[SCHEMA_GUARD] Failed to add {Table}.ClaimedAtUtc: {Error}", tableName, addEx.Message);
+                }
+            }
+        }
+
+        await EnsureColumnAsync("Tickets");
+        await EnsureColumnAsync("TicketTechnicianAssignments");
+
+        if (!wasOpen)
+        {
+            await connection.CloseAsync();
+        }
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "[SCHEMA_GUARD] ClaimedAtUtc guard encountered an error: {Error}", ex.Message);
+    }
+}
+
+static async Task EnsureTicketFieldValuesUpdatedAtColumnExistsAsync(AppDbContext context, ILogger logger)
+{
+    try
+    {
+        var connection = context.Database.GetDbConnection();
+        var wasOpen = connection.State == System.Data.ConnectionState.Open;
+        if (!wasOpen)
+        {
+            await connection.OpenAsync();
+        }
+
+        // Check if TicketFieldValues table exists
+        var tableCheckCommand = connection.CreateCommand();
+        tableCheckCommand.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND name='TicketFieldValues';";
+        var tableResult = await tableCheckCommand.ExecuteScalarAsync();
+        var tableExists = tableResult != null && tableResult.ToString() == "TicketFieldValues";
+
+        if (!tableExists)
+        {
+            logger.LogWarning("[SCHEMA_GUARD] TicketFieldValues table does not exist. Skipping UpdatedAt column check.");
+            if (!wasOpen)
+            {
+                await connection.CloseAsync();
+            }
+            return;
+        }
+
+        // Check if UpdatedAt column exists
+        var columnCheckCommand = connection.CreateCommand();
+        columnCheckCommand.CommandText = "PRAGMA table_info(TicketFieldValues);";
+        using var reader = await columnCheckCommand.ExecuteReaderAsync();
+        var columns = new List<string>();
+        while (await reader.ReadAsync())
+        {
+            var columnName = reader.GetString(1); // Column name is at index 1
+            columns.Add(columnName);
+        }
+
+        if (!columns.Contains("UpdatedAt", StringComparer.OrdinalIgnoreCase))
+        {
+            logger.LogWarning("[SCHEMA_GUARD] TicketFieldValues.UpdatedAt column does not exist. Adding it...");
+            
+            var dbPath = context.Database.GetConnectionString()?.Replace("Data Source=", "").Trim();
+            if (string.IsNullOrEmpty(dbPath))
+            {
+                dbPath = Path.Combine(Directory.GetCurrentDirectory(), "App_Data", "ticketing.db");
+            }
+            
+            // Backup database before making schema changes
+            if (File.Exists(dbPath))
+            {
+                var backupPath = $"{dbPath}.backup.{DateTime.UtcNow:yyyyMMddHHmmss}";
+                try
+                {
+                    File.Copy(dbPath, backupPath, overwrite: true);
+                    logger.LogInformation("[SCHEMA_GUARD] Database backed up to: {BackupPath}", backupPath);
+                }
+                catch (Exception backupEx)
+                {
+                    logger.LogWarning(backupEx, "[SCHEMA_GUARD] Failed to create backup: {Error}", backupEx.Message);
+                }
+            }
+            
+            // Add the UpdatedAt column
+            var addColumnSql = "ALTER TABLE TicketFieldValues ADD COLUMN UpdatedAt TEXT;";
+            
+            try
+            {
+                await context.Database.ExecuteSqlRawAsync(addColumnSql);
+                logger.LogInformation("[SCHEMA_GUARD] Successfully added UpdatedAt column to TicketFieldValues table");
+            }
+            catch (Exception createEx)
+            {
+                logger.LogError(createEx, "[SCHEMA_GUARD] Failed to add UpdatedAt column to TicketFieldValues table: {Error}", createEx.Message);
+                throw;
+            }
+        }
+        else
+        {
+            logger.LogInformation("[SCHEMA_GUARD] TicketFieldValues.UpdatedAt column exists");
+        }
+        
+        if (!wasOpen)
+        {
+            await connection.CloseAsync();
+        }
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "[SCHEMA_GUARD] Error checking TicketFieldValues.UpdatedAt column: {Error}", ex.Message);
+    }
+}
+
+
+static async Task EnsureIsSupervisorColumnExistsAsync(AppDbContext context, ILogger logger, string dbPath)
+{
+    try
+    {
+        var connection = context.Database.GetDbConnection();
+        var wasOpen = connection.State == System.Data.ConnectionState.Open;
+        if (!wasOpen) await connection.OpenAsync();
+
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "PRAGMA table_info(Technicians)";
+            using (var reader = await command.ExecuteReaderAsync())
+            {
+                while (await reader.ReadAsync())
+                {
+                    columns.Add(reader.GetString(1));
+                }
+            }
+        }
+
+        if (!columns.Contains("IsSupervisor"))
+        {
+            logger.LogWarning("[SCHEMA_GUARD] Technicians.IsSupervisor column does not exist. Adding it...");
+            if (File.Exists(dbPath))
+            {
+                try
+                {
+                    File.Copy(dbPath, "${dbPath}.backup.${DateTime.UtcNow:yyyyMMddHHmmss}", overwrite: true);
+                }
+                catch { }
+            }
+            await context.Database.ExecuteSqlRawAsync("ALTER TABLE Technicians ADD COLUMN IsSupervisor INTEGER NOT NULL DEFAULT 0;");
+            logger.LogInformation("[SCHEMA_GUARD] Successfully added IsSupervisor column to Technicians table");
+        }
+        else
+        {
+            logger.LogInformation("[SCHEMA_GUARD] Technicians.IsSupervisor column exists");
+        }
+        
+        if (!wasOpen) await connection.CloseAsync();
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "[SCHEMA_GUARD] Error checking Technicians.IsSupervisor column: {Error}", ex.Message);
+    }
+}
+
+static async Task EnsureUserLockoutColumnsExistAsync(AppDbContext context, ILogger logger, string dbPath)
+{
+    try
+    {
+        var connection = context.Database.GetDbConnection();
+        var wasOpen = connection.State == System.Data.ConnectionState.Open;
+        if (!wasOpen)
+        {
+            await connection.OpenAsync();
+        }
+
+        // Get existing columns
+        var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA table_info(Users);";
+        var columns = new List<string>();
+        using (var reader = await command.ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync())
+            {
+                columns.Add(reader.GetString(1));
+            }
+        }
+
+        // Add LockoutEnabled if missing
+        if (!columns.Contains("LockoutEnabled"))
+        {
+            logger.LogWarning("[SCHEMA_GUARD] Users.LockoutEnabled column does not exist. Adding it...");
+            await context.Database.ExecuteSqlRawAsync("ALTER TABLE Users ADD COLUMN LockoutEnabled INTEGER NOT NULL DEFAULT 0;");
+            logger.LogInformation("[SCHEMA_GUARD] Successfully added LockoutEnabled column to Users table");
+        }
+        else
+        {
+            logger.LogInformation("[SCHEMA_GUARD] Users.LockoutEnabled column exists");
+        }
+
+        // Add LockoutEnd if missing
+        if (!columns.Contains("LockoutEnd"))
+        {
+            logger.LogWarning("[SCHEMA_GUARD] Users.LockoutEnd column does not exist. Adding it...");
+            await context.Database.ExecuteSqlRawAsync("ALTER TABLE Users ADD COLUMN LockoutEnd TEXT NULL;");
+            logger.LogInformation("[SCHEMA_GUARD] Successfully added LockoutEnd column to Users table");
+        }
+        else
+        {
+            logger.LogInformation("[SCHEMA_GUARD] Users.LockoutEnd column exists");
+        }
+
+        // Add SecurityStamp if missing
+        if (!columns.Contains("SecurityStamp"))
+        {
+            logger.LogWarning("[SCHEMA_GUARD] Users.SecurityStamp column does not exist. Adding it...");
+            await context.Database.ExecuteSqlRawAsync("ALTER TABLE Users ADD COLUMN SecurityStamp TEXT NULL;");
+            logger.LogInformation("[SCHEMA_GUARD] Successfully added SecurityStamp column to Users table");
+        }
+        else
+        {
+            logger.LogInformation("[SCHEMA_GUARD] Users.SecurityStamp column exists");
+        }
+
+        if (!wasOpen) await connection.CloseAsync();
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "[SCHEMA_GUARD] Error checking Users lockout columns: {Error}", ex.Message);
+    }
+}
+
+static async Task EnsureTechnicianSoftDeleteColumnsExistAsync(AppDbContext context, ILogger logger, string dbPath)
+{
+    try
+    {
+        var connection = context.Database.GetDbConnection();
+        var wasOpen = connection.State == System.Data.ConnectionState.Open;
+        if (!wasOpen)
+        {
+            await connection.OpenAsync();
+        }
+
+        // Get existing columns
+        var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA table_info(Technicians);";
+        var columns = new List<string>();
+        using (var reader = await command.ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync())
+            {
+                columns.Add(reader.GetString(1));
+            }
+        }
+
+        // Add IsDeleted if missing
+        if (!columns.Contains("IsDeleted"))
+        {
+            logger.LogWarning("[SCHEMA_GUARD] Technicians.IsDeleted column does not exist. Adding it...");
+            await context.Database.ExecuteSqlRawAsync("ALTER TABLE Technicians ADD COLUMN IsDeleted INTEGER NOT NULL DEFAULT 0;");
+            logger.LogInformation("[SCHEMA_GUARD] Successfully added IsDeleted column to Technicians table");
+        }
+        else
+        {
+            logger.LogInformation("[SCHEMA_GUARD] Technicians.IsDeleted column exists");
+        }
+
+        // Add DeletedAt if missing
+        if (!columns.Contains("DeletedAt"))
+        {
+            logger.LogWarning("[SCHEMA_GUARD] Technicians.DeletedAt column does not exist. Adding it...");
+            await context.Database.ExecuteSqlRawAsync("ALTER TABLE Technicians ADD COLUMN DeletedAt TEXT NULL;");
+            logger.LogInformation("[SCHEMA_GUARD] Successfully added DeletedAt column to Technicians table");
+        }
+        else
+        {
+            logger.LogInformation("[SCHEMA_GUARD] Technicians.DeletedAt column exists");
+        }
+
+        // Add DeletedByUserId if missing
+        if (!columns.Contains("DeletedByUserId"))
+        {
+            logger.LogWarning("[SCHEMA_GUARD] Technicians.DeletedByUserId column does not exist. Adding it...");
+            await context.Database.ExecuteSqlRawAsync("ALTER TABLE Technicians ADD COLUMN DeletedByUserId TEXT NULL;");
+            logger.LogInformation("[SCHEMA_GUARD] Successfully added DeletedByUserId column to Technicians table");
+        }
+        else
+        {
+            logger.LogInformation("[SCHEMA_GUARD] Technicians.DeletedByUserId column exists");
+        }
+
+        if (!wasOpen) await connection.CloseAsync();
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "[SCHEMA_GUARD] Error checking Technicians soft delete columns: {Error}", ex.Message);
+    }
+}
+
+static async Task CleanupInvalidTicketFieldValuesAsync(AppDbContext context, ILogger logger)
+{
+    try
+    {
+        var connection = context.Database.GetDbConnection();
+        var wasOpen = connection.State == System.Data.ConnectionState.Open;
+        if (!wasOpen)
+        {
+            await connection.OpenAsync();
+        }
+
+        // Check if TicketFieldValues table exists
+        var tableCheckCommand = connection.CreateCommand();
+        tableCheckCommand.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND name='TicketFieldValues';";
+        var tableResult = await tableCheckCommand.ExecuteScalarAsync();
+        var tableExists = tableResult != null && tableResult.ToString() == "TicketFieldValues";
+
+        if (!tableExists)
+        {
+            logger.LogInformation("[CLEANUP] TicketFieldValues table does not exist. Skipping cleanup.");
+            if (!wasOpen)
+            {
+                await connection.CloseAsync();
+            }
+            return;
+        }
+
+        // Count rows with invalid GUIDs (empty strings, null, or invalid format)
+        var countCommand = connection.CreateCommand();
+        countCommand.CommandText = @"
+            SELECT COUNT(*) FROM TicketFieldValues 
+            WHERE Id = '' OR Id IS NULL OR TicketId = '' OR TicketId IS NULL
+            OR length(Id) != 36 OR length(TicketId) != 36;";
+        var invalidCount = await countCommand.ExecuteScalarAsync();
+        var count = Convert.ToInt32(invalidCount ?? 0);
+
+        if (count > 0)
+        {
+            logger.LogWarning("[CLEANUP] Found {Count} TicketFieldValues rows with invalid GUIDs. Cleaning up...", count);
+            
+            // Delete rows with invalid GUIDs
+            var deleteCommand = connection.CreateCommand();
+            deleteCommand.CommandText = @"
+                DELETE FROM TicketFieldValues 
+                WHERE Id = '' OR Id IS NULL OR TicketId = '' OR TicketId IS NULL
+                OR length(Id) != 36 OR length(TicketId) != 36;";
+            
+            var deleted = await deleteCommand.ExecuteNonQueryAsync();
+            logger.LogInformation("[CLEANUP] Deleted {Deleted} rows with invalid GUIDs from TicketFieldValues", deleted);
+        }
+        else
+        {
+            logger.LogInformation("[CLEANUP] No invalid GUIDs found in TicketFieldValues");
+        }
+        
+        if (!wasOpen)
+        {
+            await connection.CloseAsync();
+        }
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "[CLEANUP] Error cleaning up invalid TicketFieldValues: {Error}", ex.Message);
+    }
+}
+
+// =======================
 // Repositories
 // =======================
 builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.IFieldDefinitionRepository, 
@@ -246,8 +1274,6 @@ builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.ISystemSet
     Ticketing.Backend.Infrastructure.Data.Repositories.SystemSettingsRepository>();
 builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.IUserPreferencesRepository, 
     Ticketing.Backend.Infrastructure.Data.Repositories.UserPreferencesRepository>();
-builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.INotificationRepository, 
-    Ticketing.Backend.Infrastructure.Data.Repositories.NotificationRepository>();
 builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.ITechnicianRepository, 
     Ticketing.Backend.Infrastructure.Data.Repositories.TechnicianRepository>();
 builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.IUserRepository, 
@@ -256,6 +1282,16 @@ builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.ITicketRep
     Ticketing.Backend.Infrastructure.Data.Repositories.TicketRepository>();
 builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.ITicketMessageRepository, 
     Ticketing.Backend.Infrastructure.Data.Repositories.TicketMessageRepository>();
+builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.ITicketTechnicianAssignmentRepository, 
+    Ticketing.Backend.Infrastructure.Data.Repositories.TicketTechnicianAssignmentRepository>();
+builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.ITicketActivityEventRepository, 
+    Ticketing.Backend.Infrastructure.Data.Repositories.TicketActivityEventRepository>();
+builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.ITechnicianSubcategoryPermissionRepository, 
+    Ticketing.Backend.Infrastructure.Data.Repositories.TechnicianSubcategoryPermissionRepository>();
+builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.ITicketUserStateRepository,
+    Ticketing.Backend.Infrastructure.Data.Repositories.TicketUserStateRepository>();
+builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.ISupervisorTechnicianLinkRepository,
+    Ticketing.Backend.Infrastructure.Data.Repositories.SupervisorTechnicianLinkRepository>();
 builder.Services.AddScoped<Ticketing.Backend.Application.Repositories.IUnitOfWork, 
     Ticketing.Backend.Infrastructure.Data.Repositories.UnitOfWork>();
 
@@ -267,60 +1303,287 @@ builder.Services.AddScoped<IPasswordHasher<User>, PasswordHasher<User>>();
 builder.Services.AddScoped<IUserService, UserService>();
 builder.Services.AddScoped<ICategoryService, CategoryService>();
 builder.Services.AddScoped<IFieldDefinitionService, FieldDefinitionService>();
-builder.Services.AddScoped<INotificationService, NotificationService>();
-builder.Services.AddScoped<ITicketService, TicketService>();
+builder.Services.AddScoped<Ticketing.Backend.Application.Services.ITicketService, Ticketing.Backend.Application.Services.TicketService>();
+builder.Services.AddScoped<Ticketing.Backend.Application.Services.ISupervisorService, Ticketing.Backend.Application.Services.SupervisorService>();
 builder.Services.AddScoped<ISystemSettingsService, SystemSettingsService>();
 builder.Services.AddScoped<IUserPreferencesService, UserPreferencesService>();
 builder.Services.AddScoped<ISmartAssignmentService, SmartAssignmentService>();
 builder.Services.AddScoped<ITechnicianService, TechnicianService>();
+builder.Services.AddScoped<ISupervisorService, SupervisorService>();
+builder.Services.AddScoped<IReportService, ReportService>();
+builder.Services.AddScoped<IAutomationCoverageService, AutomationCoverageService>();
+builder.Services.AddScoped<IUserDirectoryService, BossDbUserDirectoryService>();
+builder.Services.AddScoped<IClaimsTransformation, TikqClaimsTransformation>();
 
 // =======================
-// Authentication / JWT
+// Authentication / Hybrid (Negotiate + ADFS JWT + Dev Header)
 // =======================
-builder.Services.AddAuthentication(options =>
+var hybridAuthOptions = builder.Configuration.GetSection("Authentication").Get<HybridAuthOptions>() ?? new HybridAuthOptions();
+
+var authBuilder = builder.Services.AddAuthentication(options =>
 {
-    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultAuthenticateScheme = AuthSchemes.Smart;
+    options.DefaultChallengeScheme = AuthSchemes.Smart;
 })
-.AddJwtBearer(options =>
+.AddPolicyScheme(AuthSchemes.Smart, "Hybrid selector", options =>
 {
+    options.ForwardDefaultSelector = context =>
+    {
+        var authorization = context.Request.Headers.Authorization.ToString();
+        if (!string.IsNullOrWhiteSpace(authorization) &&
+            authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+        {
+            context.RequestServices
+                .GetRequiredService<ILogger<Program>>()
+                .LogDebug("Auth scheme selected: {Scheme} for {Path}", AuthSchemes.AdfsBearer, context.Request.Path);
+            return AuthSchemes.AdfsBearer;
+        }
+
+        if (context.Request.Cookies.ContainsKey(".TikQ.ExternalAuth"))
+        {
+            return AuthSchemes.ExternalCookie;
+        }
+
+        var isDevHeaderEnabled = context.RequestServices
+            .GetRequiredService<IOptions<HybridAuthOptions>>()
+            .Value
+            .DevHeaderAuth
+            .Enabled;
+
+        var environment = context.RequestServices.GetRequiredService<IWebHostEnvironment>();
+        if (environment.IsDevelopment() &&
+            isDevHeaderEnabled &&
+            context.Request.Headers.ContainsKey("X-Dev-User"))
+        {
+            return AuthSchemes.DevHeader;
+        }
+
+        return NegotiateDefaults.AuthenticationScheme;
+    };
+})
+.AddNegotiate()
+.AddScheme<AuthenticationSchemeOptions, DevHeaderAuthenticationHandler>(AuthSchemes.DevHeader, _ => { })
+.AddCookie(AuthSchemes.ExternalCookie, options =>
+{
+    options.Cookie.Name = ".TikQ.ExternalAuth";
+    options.Cookie.HttpOnly = true;
+    options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
+        ? CookieSecurePolicy.SameAsRequest
+        : CookieSecurePolicy.Always;
+    options.Cookie.SameSite = SameSiteMode.Lax;
+    options.SlidingExpiration = true;
+});
+
+if (hybridAuthOptions.Oidc.Enabled)
+{
+    authBuilder.AddOpenIdConnect(AuthSchemes.AdfsOidc, options =>
+    {
+        options.SignInScheme = AuthSchemes.ExternalCookie;
+        options.SaveTokens = true;
+        options.RequireHttpsMetadata = !builder.Environment.IsDevelopment();
+        options.ResponseType = OpenIdConnectResponseType.Code;
+        options.GetClaimsFromUserInfoEndpoint = true;
+
+        var oidc = hybridAuthOptions.Oidc;
+        options.Authority = oidc.Authority;
+        options.MetadataAddress = oidc.MetadataAddress;
+        options.ClientId = oidc.ClientId;
+        options.ClientSecret = oidc.ClientSecret;
+        if (!string.IsNullOrWhiteSpace(oidc.CallbackPath))
+        {
+            options.CallbackPath = oidc.CallbackPath;
+        }
+
+        if (!string.IsNullOrWhiteSpace(oidc.SignedOutCallbackPath))
+        {
+            options.SignedOutCallbackPath = oidc.SignedOutCallbackPath;
+        }
+
+        options.Scope.Clear();
+        var scopes = (oidc.Scope ?? "openid profile email")
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var scope in scopes)
+        {
+            options.Scope.Add(scope);
+        }
+    });
+}
+else
+{
+    authBuilder.AddScheme<AuthenticationSchemeOptions, DisabledAdfsAuthenticationHandler>(AuthSchemes.AdfsOidc, _ => { });
+}
+
+authBuilder.AddJwtBearer(AuthSchemes.AdfsBearer, options =>
+{
+    var jwt = hybridAuthOptions.Jwt;
+    options.MapInboundClaims = false;
+    options.RequireHttpsMetadata = !builder.Environment.IsDevelopment();
+    options.Authority = jwt.Authority;
+    options.MetadataAddress = jwt.MetadataAddress;
+
+    var validIssuers = new List<string>();
+    if (!string.IsNullOrWhiteSpace(jwt.Authority))
+    {
+        validIssuers.Add(jwt.Authority.TrimEnd('/'));
+    }
+
+    validIssuers.AddRange(jwt.ValidIssuers.Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v.TrimEnd('/')));
+    if (!string.IsNullOrWhiteSpace(jwtSettings.Issuer))
+    {
+        validIssuers.Add(jwtSettings.Issuer.TrimEnd('/'));
+    }
+
+    var useLocalSymmetricSigning = string.IsNullOrWhiteSpace(jwt.Authority) &&
+                                   string.IsNullOrWhiteSpace(jwt.MetadataAddress);
+
     options.TokenValidationParameters = new TokenValidationParameters
     {
-        ValidateIssuer = true,
-        ValidateAudience = true,
+        ValidateIssuer = validIssuers.Count > 0,
+        ValidateAudience = !string.IsNullOrWhiteSpace(jwt.Audience) || !string.IsNullOrWhiteSpace(jwtSettings.Audience),
         ValidateLifetime = true,
-        ValidateIssuerSigningKey = true,
-        ValidIssuer = jwtSettings.Issuer,
-        ValidAudience = jwtSettings.Audience,
-        IssuerSigningKey = new SymmetricSecurityKey(
-            Encoding.UTF8.GetBytes(jwtSettings.Secret))
+        ValidateIssuerSigningKey = useLocalSymmetricSigning && !string.IsNullOrWhiteSpace(jwtSettings.Secret),
+        ValidAudience = jwt.Audience ?? jwtSettings.Audience,
+        ValidIssuers = validIssuers.Distinct(StringComparer.OrdinalIgnoreCase),
+        IssuerSigningKey = !useLocalSymmetricSigning || string.IsNullOrWhiteSpace(jwtSettings.Secret)
+            ? null
+            : new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSettings.Secret)),
+        NameClaimType = ClaimTypes.Name,
+        RoleClaimType = ClaimTypes.Role
+    };
+
+    options.Events = new JwtBearerEvents
+    {
+        OnMessageReceived = context =>
+        {
+            if (!string.IsNullOrWhiteSpace(context.Token))
+            {
+                return Task.CompletedTask;
+            }
+
+            var accessToken = context.Request.Query["access_token"];
+            var path = context.HttpContext.Request.Path;
+
+            if (!string.IsNullOrEmpty(accessToken) &&
+                path.StartsWithSegments("/hubs/tickets"))
+            {
+                context.Token = accessToken;
+            }
+
+            return Task.CompletedTask;
+        }
     };
 });
 
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("AdminOnly", policy =>
+        policy.RequireRole(nameof(UserRole.Admin)));
+
+    options.AddPolicy("TechnicianOnly", policy =>
+        policy.RequireRole(nameof(UserRole.Technician)));
+
+    options.AddPolicy("ClientOnly", policy =>
+        policy.RequireRole(nameof(UserRole.Client)));
+
+    options.AddPolicy("SupervisorOnly", policy =>
+        policy.RequireClaim("isSupervisor", "true"));
+
+    options.AddPolicy("SupervisorOrAdmin", policy =>
+        policy.RequireAssertion(context =>
+            context.User.IsInRole(UserRole.Admin.ToString()) ||
+            (context.User.IsInRole(UserRole.Technician.ToString()) &&
+             string.Equals(context.User.FindFirstValue("isSupervisor"), "true", StringComparison.OrdinalIgnoreCase))));
+});
+
+// =======================
+// SignalR for real-time updates
+// =======================
+builder.Services.AddSignalR(options =>
+{
+    // Enable detailed errors in development
+    options.EnableDetailedErrors = builder.Environment.IsDevelopment();
+    // Keep connections alive
+    options.KeepAliveInterval = TimeSpan.FromSeconds(15);
+    options.ClientTimeoutInterval = TimeSpan.FromSeconds(30);
+});
+
+// Register TicketHubService for broadcasting ticket updates
+builder.Services.AddScoped<Ticketing.Backend.Application.Services.ITicketHubService, 
+    Ticketing.Backend.Infrastructure.Services.TicketHubService>();
 
 // =======================
 // CORS
 // =======================
 var allowedCorsOrigins = builder.Configuration
     .GetSection("Cors:AllowedOrigins")
-    .Get<string[]>() ??
-    new[]
+    .Get<string[]>();
+
+// In Development, add common dev origins if not already configured
+if (builder.Environment.IsDevelopment())
+{
+    var devOrigins = new[]
     {
         "http://localhost:3000",
         "https://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://127.0.0.1:3000",
         "http://localhost:3001",
-        "https://localhost:3001"
+        "https://localhost:3001",
+        "http://127.0.0.1:3001",
+        "https://127.0.0.1:3001",
+        "http://localhost:5173", // Vite default
+        "https://localhost:5173"
     };
+    
+    if (allowedCorsOrigins == null || allowedCorsOrigins.Length == 0)
+    {
+        allowedCorsOrigins = devOrigins;
+    }
+    else
+    {
+        // Merge configured origins with dev origins, removing duplicates
+        var merged = new HashSet<string>(allowedCorsOrigins, StringComparer.OrdinalIgnoreCase);
+        foreach (var origin in devOrigins)
+        {
+            merged.Add(origin);
+        }
+        allowedCorsOrigins = merged.ToArray();
+    }
+}
+else
+{
+    // Production: use only configured origins, or default safe list
+    allowedCorsOrigins ??= Array.Empty<string>();
+}
 
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("Frontend", policy =>
-        policy
-            .WithOrigins(allowedCorsOrigins)
-            .AllowAnyHeader()
-            .AllowAnyMethod()
-            .AllowCredentials());
+    if (builder.Environment.IsDevelopment())
+    {
+        // Development: Allow specific dev origins + credentials for SignalR
+        options.AddPolicy(CorsPolicyName, policy =>
+            policy
+                .WithOrigins(allowedCorsOrigins)
+                .AllowAnyHeader()
+                .AllowAnyMethod()
+                .AllowCredentials());
+    }
+    else
+    {
+        // Production: Strict CORS - only configured origins
+        options.AddPolicy(CorsPolicyName, policy =>
+        {
+            if (allowedCorsOrigins.Length > 0)
+            {
+                policy
+                    .WithOrigins(allowedCorsOrigins)
+                    .AllowAnyHeader()
+                    .AllowAnyMethod()
+                    .AllowCredentials();
+            }
+            // If no origins configured in production, deny all (security)
+        });
+    }
 });
 
 // =======================
@@ -331,6 +1594,10 @@ builder.Services.AddControllers().AddJsonOptions(options =>
     options.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
     options.JsonSerializerOptions.DictionaryKeyPolicy = JsonNamingPolicy.CamelCase;
     options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+    options.JsonSerializerOptions.Converters.Add(new UtcDateTimeJsonConverter());
+    options.JsonSerializerOptions.Converters.Add(new NullableUtcDateTimeJsonConverter());
+    options.JsonSerializerOptions.Converters.Add(new UtcDateTimeOffsetJsonConverter());
+    options.JsonSerializerOptions.Converters.Add(new NullableUtcDateTimeOffsetJsonConverter());
 });
 
 builder.Services.AddEndpointsApiExplorer();
@@ -384,9 +1651,12 @@ using (var scope = app.Services.CreateScope())
 
     try
     {
+        logger.LogInformation("═══════════════════════════════════════════════════════════════");
         logger.LogInformation("[MIGRATION] Starting database migration...");
         logger.LogInformation("[MIGRATION] Database path: {DbPath}", sqliteDbPath);
         logger.LogInformation("[MIGRATION] Database file exists: {Exists}", File.Exists(sqliteDbPath));
+        logger.LogInformation("[MIGRATION] Content root: {ContentRoot}", app.Environment.ContentRootPath);
+        logger.LogInformation("[MIGRATION] Current directory: {CurrentDir}", Directory.GetCurrentDirectory());
         
         var pendingMigrations = await context.Database.GetPendingMigrationsAsync();
         var appliedMigrations = await context.Database.GetAppliedMigrationsAsync();
@@ -403,6 +1673,37 @@ using (var scope = app.Services.CreateScope())
         // Post-migration schema guard: Verify SubcategoryFieldDefinitions table schema
         // This handles cases where migrations didn't apply correctly or schema drift occurred
         await EnsureSubcategoryFieldDefinitionsSchemaAsync(context, logger, sqliteDbPath);
+
+        // Also verify Subcategories table exists (required for foreign key)
+        await EnsureSubcategoriesTableExistsAsync(context, logger, sqliteDbPath);
+        
+        // Ensure IsSupervisor column exists in Technicians table
+        await EnsureIsSupervisorColumnExistsAsync(context, logger, sqliteDbPath);
+        
+        // Ensure Users table has lockout columns
+        await EnsureUserLockoutColumnsExistAsync(context, logger, sqliteDbPath);
+        
+        // Ensure Technicians table has soft delete columns
+        await EnsureTechnicianSoftDeleteColumnsExistAsync(context, logger, sqliteDbPath);
+        
+        // Verify TicketTechnicianAssignments table exists (critical for ticket queries)
+        await EnsureTicketTechnicianAssignmentsTableExistsAsync(context, logger, sqliteDbPath);
+
+        // Dev-only SQLite guard for missing ClaimedAtUtc columns
+        if (app.Environment.IsDevelopment() &&
+            context.Database.ProviderName?.Contains("Sqlite", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            await EnsureClaimedAtUtcColumnsExistAsync(context, logger);
+        }
+        
+        // Verify TicketActivityEvents table exists (critical for ticket queries)
+        await EnsureTicketActivityEventsTableExistsAsync(context, logger);
+        
+        // Verify TicketFieldValues table has UpdatedAt column
+        await EnsureTicketFieldValuesUpdatedAtColumnExistsAsync(context, logger);
+        
+        // Clean up invalid GUIDs in TicketFieldValues
+        await CleanupInvalidTicketFieldValuesAsync(context, logger);
     }
     catch (Exception ex)
     {
@@ -426,13 +1727,114 @@ using (var scope = app.Services.CreateScope())
         }
     }
     
+    logger.LogInformation("[SEED] Running seed data initialization...");
     await SeedData.InitializeAsync(context, passwordHasher);
+    
+    // Verify seed data was applied
+    var userCount = await context.Users.CountAsync();
+    var categoryCount = await context.Categories.CountAsync();
+    var technicianCount = await context.Technicians.CountAsync();
+    
+    logger.LogInformation("[SEED] Seed data verification:");
+    logger.LogInformation("[SEED]   Users: {UserCount}", userCount);
+    logger.LogInformation("[SEED]   Categories: {CategoryCount}", categoryCount);
+    logger.LogInformation("[SEED]   Technicians: {TechnicianCount}", technicianCount);
+    
+    if (userCount == 0)
+    {
+        logger.LogWarning("[SEED] ⚠️  WARNING: No users found after seeding! Check SeedData.cs for issues.");
+    }
+    if (categoryCount == 0)
+    {
+        logger.LogWarning("[SEED] ⚠️  WARNING: No categories found after seeding! Check SeedData.cs for issues.");
+    }
+    
+    logger.LogInformation("═══════════════════════════════════════════════════════════════");
 }
 
 // =======================
 // Middleware pipeline
 // =======================
-app.UseCors("Frontend");
+app.UseRouting();
+app.UseCors(CorsPolicyName);
+
+// Enable WebSockets for SignalR
+app.UseWebSockets();
+
+// Global exception handler
+app.UseExceptionHandler(appBuilder =>
+{
+    appBuilder.Run(async context =>
+    {
+        var exceptionHandlerPathFeature = context.Features.Get<IExceptionHandlerPathFeature>();
+        var exception = exceptionHandlerPathFeature?.Error;
+        var logger = context.RequestServices.GetRequiredService<ILogger<Program>>();
+
+        if (exception != null)
+        {
+            logger.LogError(exception,
+                "Unhandled exception: {ExceptionType}, Message: {Message}, Path: {Path}, StackTrace: {StackTrace}",
+                exception.GetType().Name, exception.Message, context.Request.Path, exception.StackTrace);
+
+            context.Response.StatusCode = 500;
+            context.Response.ContentType = "application/json";
+
+            var isDevelopment = app.Environment.IsDevelopment();
+            var response = new
+            {
+                status = 500,
+                title = "An error occurred while processing your request.",
+                detail = isDevelopment ? exception.Message : "An internal server error occurred.",
+                type = exception.GetType().Name,
+                traceId = context.TraceIdentifier
+            };
+
+            if (isDevelopment)
+            {
+                var responseWithStackTrace = new
+                {
+                    status = 500,
+                    title = "An error occurred while processing your request.",
+                    detail = exception.Message,
+                    type = exception.GetType().Name,
+                    traceId = context.TraceIdentifier,
+                    stackTrace = exception.StackTrace,
+                    innerException = exception.InnerException != null ? new
+                    {
+                        message = exception.InnerException.Message,
+                        type = exception.InnerException.GetType().Name,
+                        stackTrace = exception.InnerException.StackTrace
+                    } : null
+                };
+
+                await context.Response.WriteAsync(System.Text.Json.JsonSerializer.Serialize(responseWithStackTrace, new System.Text.Json.JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+                    WriteIndented = true
+                }));
+            }
+            else
+            {
+                await context.Response.WriteAsync(System.Text.Json.JsonSerializer.Serialize(response, new System.Text.Json.JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+                    WriteIndented = true
+                }));
+            }
+        }
+    });
+});
+
+// Request logging middleware (Development only) - to identify spam
+if (app.Environment.IsDevelopment())
+{
+    app.Use(async (context, next) =>
+    {
+        var logger = context.RequestServices.GetRequiredService<ILogger<Program>>();
+        logger.LogInformation("[REQ] {Method} {Path}", context.Request.Method, context.Request.Path);
+        await next();
+    });
+}
 
 // Always enable Swagger
 app.UseSwagger();
@@ -442,12 +1844,368 @@ app.UseSwaggerUI(c =>
     c.RoutePrefix = "swagger";
 });
 
+// Enable request buffering for POST/PUT/PATCH requests so body can be re-read after model binding
+// This is critical for endpoints that accept both FormData and JSON (like CreateTicket)
+app.Use(async (context, next) =>
+{
+    if (context.Request.Method == "POST" || context.Request.Method == "PUT" || context.Request.Method == "PATCH")
+    {
+        context.Request.EnableBuffering();
+    }
+    await next();
+});
+
 app.UseAuthentication();
+app.UseMiddleware<TikqAccessGuardMiddleware>();
 app.UseAuthorization();
 
 app.MapGet("/api/ping", () => Results.Ok(new { message = "pong" }));
 
+// Health endpoint for connectivity checks (primary)
+// CRITICAL: This endpoint is used by frontend to verify backend is reachable
+app.MapGet("/api/health", async (AppDbContext dbContext, IConfiguration configuration) =>
+{
+    var logger = app.Services.GetRequiredService<ILogger<Program>>();
+    
+    // Get DB path from connection string
+    var connectionString = configuration.GetConnectionString("DefaultConnection") ?? "Data Source=App_Data/ticketing.db";
+    string dbPath = "unknown";
+    bool canConnectToDb = false;
+    bool dbFileExists = false;
+    int categoryCount = 0;
+    int ticketCount = 0;
+    int userCount = 0;
+    string? dbError = null;
+    
+    try
+    {
+        // Extract DB path from connection string
+        if (connectionString.StartsWith("Data Source=", StringComparison.OrdinalIgnoreCase))
+        {
+            var extractedPath = connectionString.Substring("Data Source=".Length).Trim();
+            if (Path.IsPathRooted(extractedPath))
+            {
+                dbPath = extractedPath;
+            }
+            else
+            {
+                // Resolve relative path
+                var contentRoot = app.Environment.ContentRootPath;
+                dbPath = Path.Combine(contentRoot, extractedPath);
+            }
+        }
+        
+        // Check if DB file exists
+        dbFileExists = File.Exists(dbPath);
+        
+        // Test DB connection
+        canConnectToDb = await dbContext.Database.CanConnectAsync();
+        
+        // If connected, check actual data counts
+        if (canConnectToDb)
+        {
+            try
+            {
+                categoryCount = await dbContext.Categories.CountAsync();
+                ticketCount = await dbContext.Tickets.CountAsync();
+                userCount = await dbContext.Users.CountAsync();
+                
+                logger.LogInformation("[HEALTH] DB Stats: Categories={Categories}, Tickets={Tickets}, Users={Users}", 
+                    categoryCount, ticketCount, userCount);
+            }
+            catch (Exception countEx)
+            {
+                dbError = $"Count query failed: {countEx.Message}";
+                logger.LogWarning(countEx, "[HEALTH] Failed to query data counts");
+            }
+        }
+    }
+    catch (Exception ex)
+    {
+        dbError = ex.Message;
+        logger.LogWarning(ex, "[HEALTH] Could not verify DB connection: {Error}", ex.Message);
+    }
+    
+    // Determine overall health status
+    var isHealthy = canConnectToDb && dbFileExists;
+    var hasData = categoryCount > 0 || userCount > 0;
+    
+    logger.LogInformation("[HEALTH] Check complete: Connected={Connected}, FileExists={FileExists}, HasData={HasData}, Path={Path}",
+        canConnectToDb, dbFileExists, hasData, dbPath);
+    
+    return Results.Ok(new
+    {
+        ok = isHealthy,
+        status = isHealthy ? "healthy" : "degraded",
+        database = new
+        {
+            path = dbPath,
+            fileExists = dbFileExists,
+            canConnect = canConnectToDb,
+            error = dbError,
+            dataCounts = new
+            {
+                categories = categoryCount,
+                tickets = ticketCount,
+                users = userCount
+            }
+        },
+        hasData = hasData,
+        timestamp = DateTime.UtcNow,
+        environment = app.Environment.EnvironmentName,
+        contentRoot = app.Environment.ContentRootPath
+    });
+});
+
+// Technician work report (explicit route so 404 does not occur if controller routing fails)
+// GET .../technician-work?from=YYYY-MM-DD&to=YYYY-MM-DD&userId=...&format=json|xlsx
+app.MapGet("/api/admin/reports/technician-work", async (
+    HttpContext httpContext,
+    string? from,
+    string? to,
+    string? userId,
+    string? format,
+    Ticketing.Backend.Application.Services.IReportService reportService,
+    ILogger<Program> logger,
+    IWebHostEnvironment env) =>
+{
+    Guid? userIdGuid = null;
+    if (!string.IsNullOrWhiteSpace(userId))
+    {
+        if (string.Equals(userId.Trim(), "all", StringComparison.OrdinalIgnoreCase))
+            userIdGuid = null;
+        else if (!Guid.TryParse(userId, out var parsed))
+            return Results.BadRequest(new { title = "Invalid userId", detail = "userId must be a valid GUID." });
+        else
+            userIdGuid = parsed;
+    }
+
+    try
+    {
+        var (startDate, endDate) = ReportsDateRange.ParseForTechnicianWork(from, to);
+        if (env.IsDevelopment() && !string.IsNullOrWhiteSpace(from) && !string.IsNullOrWhiteSpace(to))
+            logger.LogInformation("[Dev] Parsed report range: from={From} to={To} => {Start:yyyy-MM-dd}..{End:yyyy-MM-dd}", from, to, startDate, endDate);
+        logger.LogInformation("[REPORT] technician-work from={From} to={To} => {Start:yyyy-MM-dd}..{End:yyyy-MM-dd} userId={UserId} format={Format}",
+            from ?? "(null)", to ?? "(null)", startDate, endDate, userIdGuid, format ?? "json");
+
+        var fmt = string.IsNullOrWhiteSpace(format) ? "json" : format.Trim().ToLowerInvariant();
+        if (fmt == "xlsx")
+        {
+            var excelBytes = await reportService.GenerateTechnicianWorkReportExcelAsync(startDate, endDate, userIdGuid);
+            var fileName = $"technician-work-report_{startDate:yyyyMMdd}_{endDate:yyyyMMdd}.xlsx";
+            return Results.File(excelBytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
+        }
+
+        var report = await reportService.GetTechnicianWorkReportAsync(startDate, endDate, userIdGuid);
+        httpContext.Response.Headers.Append("X-Report-Row-Count", report.Users.Count.ToString());
+        return Results.Ok(report);
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to generate technician work report. TraceId: {TraceId}", httpContext.TraceIdentifier);
+        if (env.IsDevelopment())
+        {
+            return Results.Json(new
+            {
+                type = "https://tools.ietf.org/html/rfc7231#section-6.6.1",
+                title = "Report generation failed",
+                status = 500,
+                detail = ex.Message,
+                traceId = httpContext.TraceIdentifier,
+                innerMessage = ex.InnerException?.Message,
+                stackTrace = ex.StackTrace
+            }, statusCode: 500);
+        }
+        return Results.Json(new { message = "Failed to generate report." }, statusCode: 500);
+    }
+})
+.RequireAuthorization("AdminOnly");
+
+// Backward-compatible health endpoint (also at /health for compatibility)
+app.MapGet("/health", async (AppDbContext dbContext, IConfiguration configuration) =>
+{
+    var logger = app.Services.GetRequiredService<ILogger<Program>>();
+    var connectionString = configuration.GetConnectionString("DefaultConnection") ?? "Data Source=App_Data/ticketing.db";
+    string dbPath = "unknown";
+    bool canConnectToDb = false;
+    bool dbFileExists = false;
+    
+    try
+    {
+        if (connectionString.Contains("Data Source="))
+        {
+            var extractedPath = connectionString.Split(new[] { "Data Source=" }, StringSplitOptions.None)[1].Split(';')[0].Trim();
+            if (Path.IsPathRooted(extractedPath))
+            {
+                dbPath = extractedPath;
+            }
+            else
+            {
+                var contentRoot = app.Environment.ContentRootPath;
+                dbPath = Path.Combine(contentRoot, extractedPath);
+            }
+        }
+        dbFileExists = File.Exists(dbPath);
+        canConnectToDb = await dbContext.Database.CanConnectAsync();
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "[HEALTH] Could not verify DB connection: {Error}", ex.Message);
+    }
+    
+    return Results.Ok(new
+    {
+        ok = canConnectToDb && dbFileExists,
+        status = canConnectToDb && dbFileExists ? "healthy" : "degraded",
+        timestamp = DateTime.UtcNow,
+        environment = app.Environment.EnvironmentName,
+        database = new
+        {
+            path = dbPath,
+            fileExists = dbFileExists,
+            connected = canConnectToDb
+        }
+    });
+});
+
+// DEBUG endpoint: Detailed data visibility diagnostics
+// IMPORTANT: Use this endpoint when "no data showing" to diagnose root cause
+app.MapGet("/api/debug/data-status", async (AppDbContext dbContext, IConfiguration configuration) =>
+{
+    var logger = app.Services.GetRequiredService<ILogger<Program>>();
+    logger.LogInformation("[DEBUG] Data status check requested");
+    
+    var connectionString = configuration.GetConnectionString("DefaultConnection") ?? "Data Source=App_Data/ticketing.db";
+    var dbPath = sqliteDbPath; // Use the resolved path from startup
+    
+    var result = new
+    {
+        timestamp = DateTime.UtcNow,
+        database = new
+        {
+            configuredConnectionString = connectionString,
+            resolvedPath = dbPath,
+            fileExists = File.Exists(dbPath),
+            fileSizeBytes = File.Exists(dbPath) ? new FileInfo(dbPath).Length : 0,
+            contentRoot = app.Environment.ContentRootPath,
+            currentDirectory = Directory.GetCurrentDirectory()
+        },
+        dataCounts = new
+        {
+            users = 0,
+            categories = 0,
+            subcategories = 0,
+            tickets = 0,
+            technicians = 0
+        },
+        sampleData = new
+        {
+            firstUser = (object?)null,
+            firstCategory = (object?)null,
+            firstTicket = (object?)null
+        },
+        errors = new List<string>()
+    };
+    
+    var errors = new List<string>();
+    int userCount = 0, categoryCount = 0, subcategoryCount = 0, ticketCount = 0, technicianCount = 0;
+    object? firstUser = null, firstCategory = null, firstTicket = null;
+    
+    try
+    {
+        userCount = await dbContext.Users.CountAsync();
+        categoryCount = await dbContext.Categories.CountAsync();
+        subcategoryCount = await dbContext.Subcategories.CountAsync();
+        ticketCount = await dbContext.Tickets.CountAsync();
+        technicianCount = await dbContext.Technicians.CountAsync();
+        
+        // Get sample data for debugging
+        var user = await dbContext.Users.FirstOrDefaultAsync();
+        if (user != null)
+        {
+            firstUser = new { user.Id, user.Email, user.FullName, user.Role };
+        }
+        
+        var category = await dbContext.Categories.Include(c => c.Subcategories).FirstOrDefaultAsync();
+        if (category != null)
+        {
+            firstCategory = new { category.Id, category.Name, category.IsActive, SubcategoryCount = category.Subcategories.Count };
+        }
+        
+        var ticket = await dbContext.Tickets.Include(t => t.CreatedByUser).FirstOrDefaultAsync();
+        if (ticket != null)
+        {
+            firstTicket = new { ticket.Id, ticket.Title, ticket.Status, CreatedBy = ticket.CreatedByUser?.Email };
+        }
+        
+        logger.LogInformation("[DEBUG] Data counts: Users={Users}, Categories={Categories}, Tickets={Tickets}, Technicians={Technicians}",
+            userCount, categoryCount, ticketCount, technicianCount);
+    }
+    catch (Exception ex)
+    {
+        errors.Add($"Query error: {ex.Message}");
+        logger.LogError(ex, "[DEBUG] Failed to query data: {Error}", ex.Message);
+    }
+    
+    return Results.Ok(new
+    {
+        timestamp = DateTime.UtcNow,
+        database = new
+        {
+            configuredConnectionString = connectionString,
+            resolvedPath = dbPath,
+            fileExists = File.Exists(dbPath),
+            fileSizeBytes = File.Exists(dbPath) ? new FileInfo(dbPath).Length : 0,
+            contentRoot = app.Environment.ContentRootPath,
+            currentDirectory = Directory.GetCurrentDirectory()
+        },
+        dataCounts = new
+        {
+            users = userCount,
+            categories = categoryCount,
+            subcategories = subcategoryCount,
+            tickets = ticketCount,
+            technicians = technicianCount
+        },
+        sampleData = new
+        {
+            firstUser = firstUser,
+            firstCategory = firstCategory,
+            firstTicket = firstTicket
+        },
+        diagnosis = userCount == 0 && categoryCount == 0 
+            ? "DATABASE_EMPTY: No seed data found. Either migrations didn't run or wrong database file is being used."
+            : ticketCount == 0 && userCount > 0
+                ? "NO_TICKETS: Users exist but no tickets. Try creating a ticket or check if data was seeded."
+                : "DATA_EXISTS: Database has data. If UI shows empty, check frontend API calls or authorization.",
+        errors = errors
+    });
+});
+
+// Serve static files from App_Data/uploads
+var uploadsPath = Path.Combine(app.Environment.ContentRootPath, "App_Data", "uploads");
+if (Directory.Exists(uploadsPath))
+{
+    app.UseStaticFiles(new StaticFileOptions
+    {
+        FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(uploadsPath),
+        RequestPath = "/uploads"
+    });
+}
+
 app.MapControllers();
+
+// =======================
+// SignalR Hub Endpoints
+// =======================
+// Map the TicketHub for real-time ticket status synchronization
+// Frontend clients connect to /hubs/tickets to receive instant updates
+app.MapHub<Ticketing.Backend.Infrastructure.Hubs.TicketHub>("/hubs/tickets").RequireCors(CorsPolicyName);
+app.Logger.LogInformation("[SignalR] Hub mapped at {HubRoute}", "/hubs/tickets");
 
 // =======================
 // Port 5000 Preflight Check (Development only)
@@ -542,5 +2300,43 @@ if (app.Environment.IsDevelopment())
         Environment.Exit(1);
     }
 }
+
+// =======================
+// Log listening URLs on startup
+// =======================
+var startupLogger = app.Services.GetRequiredService<ILogger<Program>>();
+var configuredUrls = builder.Configuration["ASPNETCORE_URLS"] ?? Environment.GetEnvironmentVariable("ASPNETCORE_URLS") ?? "http://localhost:5000";
+var baseUrl = configuredUrls.Split(';')[0].Trim();
+
+// Extract port from URL for clear display
+var port = "unknown";
+try
+{
+    var uri = new Uri(baseUrl);
+    port = uri.Port.ToString();
+}
+catch
+{
+    // If parsing fails, try to extract port manually
+    var portMatch = System.Text.RegularExpressions.Regex.Match(baseUrl, @":(\d+)");
+    if (portMatch.Success)
+    {
+        port = portMatch.Groups[1].Value;
+    }
+}
+
+startupLogger.LogInformation("=");
+startupLogger.LogInformation("Backend Server Starting");
+startupLogger.LogInformation("=");
+startupLogger.LogInformation("Environment: {Environment}", app.Environment.EnvironmentName);
+startupLogger.LogInformation("Listening on: {Urls}", configuredUrls);
+startupLogger.LogInformation("Base URL: {BaseUrl}", baseUrl);
+startupLogger.LogInformation("Port: {Port}", port);
+startupLogger.LogInformation("Swagger UI: {SwaggerUrl}", $"{baseUrl}/swagger");
+startupLogger.LogInformation("Health Check: {HealthUrl}", $"{baseUrl}/api/health");
+startupLogger.LogInformation("CORS Origins: {Origins}", string.Join(", ", allowedCorsOrigins));
+startupLogger.LogInformation("=");
+startupLogger.LogInformation("IMPORTANT: Frontend should use NEXT_PUBLIC_API_BASE_URL={BaseUrl}", baseUrl);
+startupLogger.LogInformation("=");
 
 app.Run();

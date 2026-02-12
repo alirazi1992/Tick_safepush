@@ -48,7 +48,7 @@ export function TicketFormStep1({ control, errors, categoriesData }: TicketFormS
                   <SelectTrigger className="text-right">
                     <SelectValue placeholder="انتخاب اولویت" />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent side="bottom" align="start" sideOffset={8} avoidCollisions={false}>
                     <SelectItem value="low">
                       <div className="flex items-center gap-2 text-right">
                         <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
@@ -111,7 +111,7 @@ export function TicketFormStep1({ control, errors, categoriesData }: TicketFormS
                   <SelectTrigger className="text-right">
                     <SelectValue placeholder="انتخاب دسته اصلی مشکل" />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent side="bottom" align="start" sideOffset={8} avoidCollisions={false}>
                     {}
                     {Object.entries(categoriesData).map(([key, category]: [string, any]) => (
                       <SelectItem key={key} value={key}>
@@ -139,7 +139,7 @@ export function TicketFormStep1({ control, errors, categoriesData }: TicketFormS
                     <SelectTrigger className="text-right">
                       <SelectValue placeholder="انتخاب مشکل دقیق" />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent side="bottom" align="start" sideOffset={8} avoidCollisions={false}>
                       {}
                       {Object.entries(availableSubIssues).map(([key, subIssue]: [string, any]) => (
                         <SelectItem key={key} value={key}>

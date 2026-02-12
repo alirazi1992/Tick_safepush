@@ -80,4 +80,5 @@ public class UserDto
     public string? PhoneNumber { get; set; }
     public string? Department { get; set; }
     public string? AvatarUrl { get; set; }
+    public bool IsSupervisor { get; set; }
 }

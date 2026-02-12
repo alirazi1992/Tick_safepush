@@ -13,6 +13,10 @@ public class TechnicianResponse
     /// Linked User.Id (for JWT sub / assignment). Null = technician cannot be assigned to tickets.
     /// </summary>
     public Guid? UserId { get; set; }
+    /// <summary>
+    /// List of subcategory IDs this technician has expertise in
+    /// </summary>
+    public List<int> SubcategoryIds { get; set; } = new List<int>();
 }
 
 public class TechnicianCreateRequest
@@ -22,6 +26,10 @@ public class TechnicianCreateRequest
     public string? Phone { get; set; }
     public string? Department { get; set; }
     public bool IsActive { get; set; } = true;
+    /// <summary>
+    /// List of subcategory IDs this technician has expertise in (optional)
+    /// </summary>
+    public List<int>? SubcategoryIds { get; set; }
 }
 
 public class TechnicianUpdateRequest
@@ -31,6 +39,10 @@ public class TechnicianUpdateRequest
     public string? Phone { get; set; }
     public string? Department { get; set; }
     public bool IsActive { get; set; } = true;
+    /// <summary>
+    /// List of subcategory IDs this technician has expertise in (optional - replaces existing permissions)
+    /// </summary>
+    public List<int>? SubcategoryIds { get; set; }
 }
 
 public class TechnicianStatusUpdateRequest
@@ -48,4 +60,3 @@ public class TechnicianLinkUserRequest
     /// </summary>
     public Guid UserId { get; set; }
 }
-
