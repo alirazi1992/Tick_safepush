@@ -84,6 +84,7 @@ async function testApiUrl(baseUrl: string, timeout = 2000): Promise<boolean> {
       signal: controller.signal,
       cache: "no-store",
       mode: "cors", // Explicitly set CORS mode
+      credentials: "include",
     });
     
     clearTimeout(timeoutId);
@@ -251,6 +252,7 @@ async function pingApiHealth(baseUrl: string): Promise<{ ok: boolean; status?: n
       signal: controller.signal,
       cache: "no-store",
       mode: "cors",
+      credentials: "include",
     });
     clearTimeout(timeoutId);
     return { ok: res.ok, status: res.status, url: healthUrl };
