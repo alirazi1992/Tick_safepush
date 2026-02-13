@@ -14,6 +14,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Debug - Ticketing.Api.csproj
+        run: |
+          echo "=== Ticketing.Api.csproj ==="
+          cat backend/Ticketing.Backend/src/Ticketing.Api/Ticketing.Api.csproj
+        working-directory: ${{ github.workspace }}
+
+      - name: Debug - TicketsController.cs (first 40 lines)
+        run: |
+          echo "=== TicketsController.cs (first 40 lines) ==="
+          head -40 backend/Ticketing.Backend/src/Ticketing.Api/Controllers/TicketsController.cs
+        working-directory: ${{ github.workspace }}
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
