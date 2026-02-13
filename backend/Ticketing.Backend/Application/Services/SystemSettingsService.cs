@@ -1,8 +1,7 @@
 using System.Text.Json;
-using Microsoft.EntityFrameworkCore;
 using Ticketing.Backend.Application.DTOs;
+using Ticketing.Backend.Application.Repositories;
 using Ticketing.Backend.Domain.Entities;
-using Ticketing.Backend.Infrastructure.Data;
 
 namespace Ticketing.Backend.Application.Services;
 
@@ -14,38 +13,28 @@ public interface ISystemSettingsService
 
 public class SystemSettingsService : ISystemSettingsService
 {
-    private readonly AppDbContext _context;
+    private readonly ISystemSettingsRepository _repository;
+    private readonly IUnitOfWork _unitOfWork;
 
-    public SystemSettingsService(AppDbContext context)
+    public SystemSettingsService(
+        ISystemSettingsRepository repository,
+        IUnitOfWork unitOfWork)
     {
-        _context = context;
+        _repository = repository;
+        _unitOfWork = unitOfWork;
     }
 
     public async Task<SystemSettingsResponse> GetSystemSettingsAsync()
     {
-        var settings = await _context.SystemSettings
-            .FirstOrDefaultAsync(s => s.Id == 1);
-
-        if (settings == null)
-        {
-            // Create default settings if none exist
-            settings = new SystemSettings
-            {
-                Id = 1,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
-            _context.SystemSettings.Add(settings);
-            await _context.SaveChangesAsync();
-        }
+        var settings = await _repository.GetOrCreateDefaultAsync(1);
+        await _unitOfWork.SaveChangesAsync();
 
         return MapToResponse(settings);
     }
 
     public async Task<SystemSettingsResponse> UpdateSystemSettingsAsync(SystemSettingsUpdateRequest request)
     {
-        var settings = await _context.SystemSettings
-            .FirstOrDefaultAsync(s => s.Id == 1);
+        var settings = await _repository.GetByIdAsync(1);
 
         if (settings == null)
         {
@@ -54,7 +43,7 @@ public class SystemSettingsService : ISystemSettingsService
                 Id = 1,
                 CreatedAt = DateTime.UtcNow
             };
-            _context.SystemSettings.Add(settings);
+            await _repository.AddAsync(settings);
         }
 
         // Update properties
@@ -88,7 +77,8 @@ public class SystemSettingsService : ISystemSettingsService
 
         settings.UpdatedAt = DateTime.UtcNow;
 
-        await _context.SaveChangesAsync();
+        await _repository.UpdateAsync(settings);
+        await _unitOfWork.SaveChangesAsync();
 
         return MapToResponse(settings);
     }

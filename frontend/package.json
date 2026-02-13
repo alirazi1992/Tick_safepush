@@ -4,12 +4,15 @@
   "private": true,
   "scripts": {
     "build": "next build",
-    "dev": "next dev",
+    "dev": "next dev -p 3001",
     "lint": "next lint",
-    "start": "next start"
+    "lint:fix": "next lint --fix",
+    "start": "next start",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@hookform/resolvers": "latest",
+    "@microsoft/signalr": "^8.0.17",
     "@radix-ui/react-accordion": "latest",
     "@radix-ui/react-alert-dialog": "latest",
     "@radix-ui/react-aspect-ratio": "latest",
@@ -54,6 +57,7 @@
     "react-dom": "^19",
     "react-dropzone": "latest",
     "react-hook-form": "latest",
+    "react-multi-date-picker": "^4.5.2",
     "react-resizable-panels": "latest",
     "recharts": "latest",
     "sonner": "latest",
@@ -64,6 +68,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.41.2",
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",

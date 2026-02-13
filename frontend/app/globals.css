@@ -124,3 +124,21 @@
 .dark [dir="rtl"] ::-webkit-scrollbar-thumb:hover {
   background: hsl(var(--foreground) / 0.7);
 }
+
+/* Responsive: prevent overflow from long ids and ensure responsive images */
+[data-ticket-id],
+.ticket-id,
+[class*="ticketId"] {
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+img:not([width]):not([height]) {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Page-level overflow guard */
+body {
+  overflow-x: hidden;
+}

@@ -1,4 +1,4 @@
-﻿"use client"
+"use client"
 
 import { useState } from "react"
 import { useForm, Controller } from "react-hook-form"
@@ -16,24 +16,24 @@ import { useAuth } from "@/lib/auth-context"
 
 
 const loginSchema = yup.object({
-  email: yup.string().required("Ø§ÛŒÙ…ÛŒÙ„ Ø§Ù„Ø²Ø§Ù…ÛŒ Ø§Ø³Øª").email("ÙØ±Ù…Øª Ø§ÛŒÙ…ÛŒÙ„ ØµØ­ÛŒØ­ Ù†ÛŒØ³Øª"),
-  password: yup.string().required("Ø±Ù…Ø² Ø¹Ø¨ÙˆØ± Ø§Ù„Ø²Ø§Ù…ÛŒ Ø§Ø³Øª").min(6, "Ø±Ù…Ø² Ø¹Ø¨ÙˆØ± Ø¨Ø§ÛŒØ¯ Ø­Ø¯Ø§Ù‚Ù„ Û¶ Ú©Ø§Ø±Ø§Ú©ØªØ± Ø¨Ø§Ø´Ø¯"),
+  email: yup.string().required("ایمیل الزامی است").email("فرمت ایمیل صحیح نیست"),
+  password: yup.string().required("رمز عبور الزامی است").min(6, "رمز عبور باید حداقل ۶ کاراکتر باشد"),
 })
 
 const signupSchema = yup.object({
-  name: yup.string().required("Ù†Ø§Ù… Ùˆ Ù†Ø§Ù… Ø®Ø§Ù†ÙˆØ§Ø¯Ú¯ÛŒ Ø§Ù„Ø²Ø§Ù…ÛŒ Ø§Ø³Øª").min(2, "Ù†Ø§Ù… Ø¨Ø§ÛŒØ¯ Ø­Ø¯Ø§Ù‚Ù„ Û² Ú©Ø§Ø±Ø§Ú©ØªØ± Ø¨Ø§Ø´Ø¯"),
-  email: yup.string().required("Ø§ÛŒÙ…ÛŒÙ„ Ø§Ù„Ø²Ø§Ù…ÛŒ Ø§Ø³Øª").email("ÙØ±Ù…Øª Ø§ÛŒÙ…ÛŒÙ„ ØµØ­ÛŒØ­ Ù†ÛŒØ³Øª"),
+  name: yup.string().required("نام و نام خانوادگی الزامی است").min(2, "نام باید حداقل ۲ کاراکتر باشد"),
+  email: yup.string().required("ایمیل الزامی است").email("فرمت ایمیل صحیح نیست"),
   phone: yup
     .string()
-    .required("Ø´Ù…Ø§Ø±Ù‡ ØªÙ…Ø§Ø³ Ø§Ù„Ø²Ø§Ù…ÛŒ Ø§Ø³Øª")
-    .matches(/^(\+98|0)?9\d{9}$/, "Ø´Ù…Ø§Ø±Ù‡ ØªÙ…Ø§Ø³ Ù…Ø¹ØªØ¨Ø± Ù†ÛŒØ³Øª"),
-  department: yup.string().required("Ø§Ù†ØªØ®Ø§Ø¨ Ø¨Ø®Ø´ Ø§Ù„Ø²Ø§Ù…ÛŒ Ø§Ø³Øª"),
-  role: yup.string().required("Ø§Ù†ØªØ®Ø§Ø¨ Ù†Ù‚Ø´ Ø§Ù„Ø²Ø§Ù…ÛŒ Ø§Ø³Øª"),
-  password: yup.string().required("Ø±Ù…Ø² Ø¹Ø¨ÙˆØ± Ø§Ù„Ø²Ø§Ù…ÛŒ Ø§Ø³Øª").min(6, "Ø±Ù…Ø² Ø¹Ø¨ÙˆØ± Ø¨Ø§ÛŒØ¯ Ø­Ø¯Ø§Ù‚Ù„ Û¶ Ú©Ø§Ø±Ø§Ú©ØªØ± Ø¨Ø§Ø´Ø¯"),
+    .required("شماره تماس الزامی است")
+    .matches(/^(\+98|0)?9\d{9}$/, "شماره تماس معتبر نیست"),
+  department: yup.string().required("انتخاب بخش الزامی است"),
+  role: yup.string().required("انتخاب نقش الزامی است"),
+  password: yup.string().required("رمز عبور الزامی است").min(6, "رمز عبور باید حداقل ۶ کاراکتر باشد"),
   confirmPassword: yup
     .string()
-    .required("ØªÚ©Ø±Ø§Ø± Ø±Ù…Ø² Ø¹Ø¨ÙˆØ± Ø§Ù„Ø²Ø§Ù…ÛŒ Ø§Ø³Øª")
-    .oneOf([yup.ref("password")], "Ø±Ù…Ø²Ù‡Ø§ÛŒ Ø¹Ø¨ÙˆØ± Ù…Ø·Ø§Ø¨Ù‚Øª Ù†Ø¯Ø§Ø±Ù†Ø¯"),
+    .required("تکرار رمز عبور الزامی است")
+    .oneOf([yup.ref("password")], "رمزهای عبور مطابقت ندارند"),
 })
 
 interface LoginDialogProps {
@@ -75,22 +75,22 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
       const success = await login(data.email, data.password)
       if (success) {
         toast({
-          title: "ÙˆØ±ÙˆØ¯ Ù…ÙˆÙÙ‚",
-          description: "Ø¨Ù‡ Ø³ÛŒØ³ØªÙ… Ø®ÙˆØ´ Ø¢Ù…Ø¯ÛŒØ¯",
+          title: "ورود موفق",
+          description: "به سیستم خوش آمدید",
         })
         onOpenChange(false)
         loginForm.reset()
       } else {
         toast({
-          title: "Ø®Ø·Ø§ Ø¯Ø± ÙˆØ±ÙˆØ¯",
-          description: "Ø§ÛŒÙ…ÛŒÙ„ ÛŒØ§ Ø±Ù…Ø² Ø¹Ø¨ÙˆØ± Ø§Ø´ØªØ¨Ø§Ù‡ Ø§Ø³Øª",
+          title: "خطا در ورود",
+          description: "ایمیل یا رمز عبور اشتباه است",
           variant: "destructive",
         })
       }
     } catch (error) {
       toast({
-        title: "Ø®Ø·Ø§ Ø¯Ø± ÙˆØ±ÙˆØ¯",
-        description: "Ù…Ø´Ú©Ù„ÛŒ Ø¯Ø± Ø³ÛŒØ³ØªÙ… Ø±Ø® Ø¯Ø§Ø¯Ù‡ Ø§Ø³Øª",
+        title: "خطا در ورود",
+        description: "مشکلی در سیستم رخ داده است",
         variant: "destructive",
       })
     }
@@ -109,23 +109,23 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
 
       if (success) {
         toast({
-          title: "Ø«Ø¨Øªâ€ŒÙ†Ø§Ù… Ù…ÙˆÙÙ‚",
-          description: "Ø­Ø³Ø§Ø¨ Ø´Ù…Ø§ Ø¨Ø§ Ù…ÙˆÙÙ‚ÛŒØª Ø§ÛŒØ¬Ø§Ø¯ Ø´Ø¯",
+          title: "ثبت‌نام موفق",
+          description: "حساب شما با موفقیت ایجاد شد",
         })
         onOpenChange(false)
         signupForm.reset()
         setActiveTab("login")
       } else {
         toast({
-          title: "Ø®Ø·Ø§ Ø¯Ø± Ø«Ø¨Øªâ€ŒÙ†Ø§Ù…",
-          description: "Ø§ÛŒÙ† Ø§ÛŒÙ…ÛŒÙ„ Ù‚Ø¨Ù„Ø§Ù‹ Ø«Ø¨Øª Ø´Ø¯Ù‡ Ø§Ø³Øª",
+          title: "خطا در ثبت‌نام",
+          description: "این ایمیل قبلاً ثبت شده است",
           variant: "destructive",
         })
       }
     } catch (error) {
       toast({
-        title: "Ø®Ø·Ø§ Ø¯Ø± Ø«Ø¨Øªâ€ŒÙ†Ø§Ù…",
-        description: "Ù…Ø´Ú©Ù„ÛŒ Ø¯Ø± Ø³ÛŒØ³ØªÙ… Ø±Ø® Ø¯Ø§Ø¯Ù‡ Ø§Ø³Øª",
+        title: "خطا در ثبت‌نام",
+        description: "مشکلی در سیستم رخ داده است",
         variant: "destructive",
       })
     }
@@ -145,25 +145,25 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
   const getRoleLabel = (role: string) => {
     switch (role) {
       case "admin":
-        return "Ù…Ø¯ÛŒØ± Ø³ÛŒØ³ØªÙ…"
+        return "مدیر سیستم"
       case "technician":
-        return "ØªÚ©Ù†Ø³ÛŒÙ†"
+        return "تکنسین"
       default:
-        return "Ú©Ø§Ø±Ø¨Ø±"
+        return "کاربر"
     }
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg" dir="rtl">
+      <DialogContent className="max-h-[85vh] overflow-y-auto w-[95vw] sm:w-[90vw] sm:max-w-lg" dir="rtl">
         <DialogHeader>
           <DialogTitle className="text-right">
-            {activeTab === "login" ? "ÙˆØ±ÙˆØ¯ Ø¨Ù‡ Ø³ÛŒØ³ØªÙ…" : "Ø«Ø¨Øªâ€ŒÙ†Ø§Ù… Ø¯Ø± Ø³ÛŒØ³ØªÙ…"}
+            {activeTab === "login" ? "ورود به سیستم" : "ثبت‌نام در سیستم"}
           </DialogTitle>
           <DialogDescription className="text-right">
             {activeTab === "login"
-              ? "Ø¨Ø±Ø§ÛŒ Ø¯Ø³ØªØ±Ø³ÛŒ Ø¨Ù‡ Ø³ÛŒØ³ØªÙ…ØŒ Ø§Ø·Ù„Ø§Ø¹Ø§Øª Ø®ÙˆØ¯ Ø±Ø§ ÙˆØ§Ø±Ø¯ Ú©Ù†ÛŒØ¯"
-              : "Ø¨Ø±Ø§ÛŒ Ø§ÛŒØ¬Ø§Ø¯ Ø­Ø³Ø§Ø¨ Ú©Ø§Ø±Ø¨Ø±ÛŒ Ø¬Ø¯ÛŒØ¯ØŒ ÙØ±Ù… Ø²ÛŒØ± Ø±Ø§ ØªÚ©Ù…ÛŒÙ„ Ú©Ù†ÛŒØ¯"}
+              ? "برای دسترسی به سیستم، اطلاعات خود را وارد کنید"
+              : "برای ایجاد حساب کاربری جدید، فرم زیر را تکمیل کنید"}
           </DialogDescription>
         </DialogHeader>
 
@@ -171,31 +171,31 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
           <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="login" className="gap-2">
               <LogIn className="w-4 h-4" />
-              ÙˆØ±ÙˆØ¯
+              ورود
             </TabsTrigger>
             <TabsTrigger value="signup" className="gap-2">
               <UserPlus className="w-4 h-4" />
-              Ø«Ø¨Øªâ€ŒÙ†Ø§Ù…
+              ثبت‌نام
             </TabsTrigger>
           </TabsList>
 
           <TabsContent value="login" className="space-y-4">
             {/* Role Selection for Login */}
             <div className="space-y-2">
-              <Label className="text-right">Ù†ÙˆØ¹ Ú©Ø§Ø±Ø¨Ø±ÛŒ</Label>
+              <Label className="text-right">نوع کاربری</Label>
               <Tabs value={loginType} onValueChange={setLoginType} className="w-full" dir="rtl">
                 <TabsList className="grid w-full grid-cols-3">
                   <TabsTrigger value="client" className="gap-1 text-xs">
                     <User className="w-3 h-3" />
-                    Ú©Ø§Ø±Ø¨Ø±
+                    کاربر
                   </TabsTrigger>
                   <TabsTrigger value="technician" className="gap-1 text-xs">
                     <Wrench className="w-3 h-3" />
-                    ØªÚ©Ù†Ø³ÛŒÙ†
+                    تکنسین
                   </TabsTrigger>
                   <TabsTrigger value="admin" className="gap-1 text-xs">
                     <Shield className="w-3 h-3" />
-                    Ù…Ø¯ÛŒØ±
+                    مدیر
                   </TabsTrigger>
                 </TabsList>
               </Tabs>
@@ -204,7 +204,7 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
             <form onSubmit={loginForm.handleSubmit(handleLogin)} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="email" className="text-right">
-                  Ø§ÛŒÙ…ÛŒÙ„
+                  ایمیل
                 </Label>
                 <Controller
                   name="email"
@@ -220,7 +220,7 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
 
               <div className="space-y-2">
                 <Label htmlFor="password" className="text-right">
-                  Ø±Ù…Ø² Ø¹Ø¨ÙˆØ±
+                  رمز عبور
                 </Label>
                 <div className="relative">
                   <Controller
@@ -230,7 +230,7 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
                       <Input
                         {...field}
                         type={showPassword ? "text" : "password"}
-                        placeholder="Ø±Ù…Ø² Ø¹Ø¨ÙˆØ± Ø®ÙˆØ¯ Ø±Ø§ ÙˆØ§Ø±Ø¯ Ú©Ù†ÛŒØ¯"
+                        placeholder="رمز عبور خود را وارد کنید"
                         className="text-right pl-10"
                         dir="rtl"
                       />
@@ -256,33 +256,33 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
               </div>
 
               <Button type="submit" className="w-full" disabled={loginForm.formState.isSubmitting}>
-                {loginForm.formState.isSubmitting ? "Ø¯Ø± Ø­Ø§Ù„ ÙˆØ±ÙˆØ¯..." : "ÙˆØ±ÙˆØ¯"}
+                {loginForm.formState.isSubmitting ? "در حال ورود..." : "ورود"}
               </Button>
             </form>
 
             {/* Demo Accounts */}
             <div className="pt-4 border-t">
-              <p className="text-xs text-muted-foreground text-center mb-2">Ø­Ø³Ø§Ø¨â€ŒÙ‡Ø§ÛŒ Ù†Ù…ÙˆÙ†Ù‡ Ø¨Ø±Ø§ÛŒ ØªØ³Øª:</p>
+              <p className="text-xs text-muted-foreground text-center mb-2">حساب‌های نمونه برای تست:</p>
               <div className="space-y-1 text-xs text-muted-foreground">
                 <div className="flex justify-between items-center p-2 bg-muted/50 rounded">
-                  <span>Ú©Ø§Ø±Ø¨Ø±: client1@test.com / Client123!</span>
+                  <span>کاربر: client1@test.com / Client123!</span>
                   <User className="w-3 h-3" />
                 </div>
                 <div className="flex justify-between items-center p-2 bg-muted/50 rounded">
-                  <span>ØªÚ©Ù†Ø³ÛŒÙ†: tech1@test.com / Tech123!</span>
+                  <span>تکنسین: tech1@test.com / Tech123!</span>
                   <Wrench className="w-3 h-3" />
                 </div>
                 <div className="flex justify-between items-center p-2 bg-muted/50 rounded">
-                  <span>Ù…Ø¯ÛŒØ±: admin@test.com / Admin123!</span>
+                  <span>مدیر: admin@test.com / Admin123!</span>
                   <Shield className="w-3 h-3" />
                 </div>
               </div>
             </div>
 
             <div className="text-center text-sm text-muted-foreground">
-              <p>Ø­Ø³Ø§Ø¨ Ú©Ø§Ø±Ø¨Ø±ÛŒ Ù†Ø¯Ø§Ø±ÛŒØ¯ØŸ</p>
+              <p>حساب کاربری ندارید؟</p>
               <Button variant="link" className="p-0 h-auto text-primary" onClick={() => setActiveTab("signup")}>
-                Ø«Ø¨Øªâ€ŒÙ†Ø§Ù… Ú©Ù†ÛŒØ¯
+                ثبت‌نام کنید
               </Button>
             </div>
           </TabsContent>
@@ -292,13 +292,13 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
               <div className="grid grid-cols-1 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="name" className="text-right">
-                    Ù†Ø§Ù… Ùˆ Ù†Ø§Ù… Ø®Ø§Ù†ÙˆØ§Ø¯Ú¯ÛŒ *
+                    نام و نام خانوادگی *
                   </Label>
                   <Controller
                     name="name"
                     control={signupForm.control}
                     render={({ field }) => (
-                      <Input {...field} placeholder="Ù†Ø§Ù… Ú©Ø§Ù…Ù„ Ø®ÙˆØ¯ Ø±Ø§ ÙˆØ§Ø±Ø¯ Ú©Ù†ÛŒØ¯" className="text-right" dir="rtl" />
+                      <Input {...field} placeholder="نام کامل خود را وارد کنید" className="text-right" dir="rtl" />
                     )}
                   />
                   {signupForm.formState.errors.name && (
@@ -308,7 +308,7 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
 
                 <div className="space-y-2">
                   <Label htmlFor="email" className="text-right">
-                    Ø§ÛŒÙ…ÛŒÙ„ *
+                    ایمیل *
                   </Label>
                   <Controller
                     name="email"
@@ -330,7 +330,7 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
 
                 <div className="space-y-2">
                   <Label htmlFor="phone" className="text-right">
-                    Ø´Ù…Ø§Ø±Ù‡ ØªÙ…Ø§Ø³ *
+                    شماره تماس *
                   </Label>
                   <Controller
                     name="phone"
@@ -346,7 +346,7 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
 
                 <div className="space-y-2">
                   <Label htmlFor="department" className="text-right">
-                    Ø¨Ø®Ø´ *
+                    بخش *
                   </Label>
                   <Controller
                     name="department"
@@ -354,17 +354,17 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
                     render={({ field }) => (
                       <Select onValueChange={field.onChange} value={field.value} dir="rtl">
                         <SelectTrigger className="text-right">
-                          <SelectValue placeholder="Ø§Ù†ØªØ®Ø§Ø¨ Ø¨Ø®Ø´" />
+                          <SelectValue placeholder="انتخاب بخش" />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="it">ÙÙ†Ø§ÙˆØ±ÛŒ Ø§Ø·Ù„Ø§Ø¹Ø§Øª</SelectItem>
-                          <SelectItem value="hr">Ù…Ù†Ø§Ø¨Ø¹ Ø§Ù†Ø³Ø§Ù†ÛŒ</SelectItem>
-                          <SelectItem value="finance">Ù…Ø§Ù„ÛŒ</SelectItem>
-                          <SelectItem value="marketing">Ø¨Ø§Ø²Ø§Ø±ÛŒØ§Ø¨ÛŒ</SelectItem>
-                          <SelectItem value="operations">Ø¹Ù…Ù„ÛŒØ§Øª</SelectItem>
-                          <SelectItem value="accounting">Ø­Ø³Ø§Ø¨Ø¯Ø§Ø±ÛŒ</SelectItem>
-                          <SelectItem value="sales">ÙØ±ÙˆØ´</SelectItem>
-                          <SelectItem value="other">Ø³Ø§ÛŒØ±</SelectItem>
+                          <SelectItem value="it">فناوری اطلاعات</SelectItem>
+                          <SelectItem value="hr">منابع انسانی</SelectItem>
+                          <SelectItem value="finance">مالی</SelectItem>
+                          <SelectItem value="marketing">بازاریابی</SelectItem>
+                          <SelectItem value="operations">عملیات</SelectItem>
+                          <SelectItem value="accounting">حسابداری</SelectItem>
+                          <SelectItem value="sales">فروش</SelectItem>
+                          <SelectItem value="other">سایر</SelectItem>
                         </SelectContent>
                       </Select>
                     )}
@@ -376,7 +376,7 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
 
                 <div className="space-y-2">
                   <Label htmlFor="role" className="text-right">
-                    Ù†Ù‚Ø´ *
+                    نقش *
                   </Label>
                   <Controller
                     name="role"
@@ -384,19 +384,19 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
                     render={({ field }) => (
                       <Select onValueChange={field.onChange} value={field.value} dir="rtl">
                         <SelectTrigger className="text-right">
-                          <SelectValue placeholder="Ø§Ù†ØªØ®Ø§Ø¨ Ù†Ù‚Ø´" />
+                          <SelectValue placeholder="انتخاب نقش" />
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="client">
                             <div className="flex items-center gap-2">
                               <User className="w-4 h-4" />
-                              Ú©Ø§Ø±Ø¨Ø±
+                              کاربر
                             </div>
                           </SelectItem>
                           <SelectItem value="engineer">
                             <div className="flex items-center gap-2">
                               <Wrench className="w-4 h-4" />
-                              ØªÚ©Ù†Ø³ÛŒÙ†
+                              تکنسین
                             </div>
                           </SelectItem>
                         </SelectContent>
@@ -410,7 +410,7 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
 
                 <div className="space-y-2">
                   <Label htmlFor="password" className="text-right">
-                    Ø±Ù…Ø² Ø¹Ø¨ÙˆØ± *
+                    رمز عبور *
                   </Label>
                   <div className="relative">
                     <Controller
@@ -420,7 +420,7 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
                         <Input
                           {...field}
                           type={showPassword ? "text" : "password"}
-                          placeholder="Ø­Ø¯Ø§Ù‚Ù„ Û¶ Ú©Ø§Ø±Ø§Ú©ØªØ±"
+                          placeholder="حداقل ۶ کاراکتر"
                           className="text-right pl-10"
                           dir="rtl"
                         />
@@ -447,7 +447,7 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
 
                 <div className="space-y-2">
                   <Label htmlFor="confirmPassword" className="text-right">
-                    ØªÚ©Ø±Ø§Ø± Ø±Ù…Ø² Ø¹Ø¨ÙˆØ± *
+                    تکرار رمز عبور *
                   </Label>
                   <div className="relative">
                     <Controller
@@ -457,7 +457,7 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
                         <Input
                           {...field}
                           type={showConfirmPassword ? "text" : "password"}
-                          placeholder="Ø±Ù…Ø² Ø¹Ø¨ÙˆØ± Ø±Ø§ Ù…Ø¬Ø¯Ø¯Ø§Ù‹ ÙˆØ§Ø±Ø¯ Ú©Ù†ÛŒØ¯"
+                          placeholder="رمز عبور را مجدداً وارد کنید"
                           className="text-right pl-10"
                           dir="rtl"
                         />
@@ -486,14 +486,14 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
               </div>
 
               <Button type="submit" className="w-full" disabled={signupForm.formState.isSubmitting}>
-                {signupForm.formState.isSubmitting ? "Ø¯Ø± Ø­Ø§Ù„ Ø«Ø¨Øªâ€ŒÙ†Ø§Ù…..." : "Ø«Ø¨Øªâ€ŒÙ†Ø§Ù…"}
+                {signupForm.formState.isSubmitting ? "در حال ثبت‌نام..." : "ثبت‌نام"}
               </Button>
             </form>
 
             <div className="text-center text-sm text-muted-foreground">
-              <p>Ù‚Ø¨Ù„Ø§Ù‹ Ø«Ø¨Øªâ€ŒÙ†Ø§Ù… Ú©Ø±Ø¯Ù‡â€ŒØ§ÛŒØ¯ØŸ</p>
+              <p>قبلاً ثبت‌نام کرده‌اید؟</p>
               <Button variant="link" className="p-0 h-auto text-primary" onClick={() => setActiveTab("login")}>
-                ÙˆØ§Ø±Ø¯ Ø´ÙˆÛŒØ¯
+                وارد شوید
               </Button>
             </div>
           </TabsContent>

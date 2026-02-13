@@ -2,17 +2,20 @@
 
 import React from "react"
 
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Checkbox } from "@/components/ui/checkbox"
 import { toast } from "@/hooks/use-toast"
+import { AssignedTechniciansCell } from "@/components/assigned-technicians-cell"
 import {
   Search,
   Filter,
@@ -33,23 +36,44 @@ import {
   Mail,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
+import {
+  TICKET_STATUS_LABELS,
+  TICKET_STATUS_OPTIONS,
+  getTicketStatusLabel,
+  type TicketStatus,
+} from "@/lib/ticket-status"
+import { apiRequest } from "@/lib/api-client"
+import {
+  autoAssignAdminTicket,
+  getAdminTechnicianDirectory,
+  manualAssignAdminTicket,
+} from "@/lib/admin-tickets-api"
+import type { ApiAdminTechnicianDirectoryItemDto, ApiTicketMessageDto } from "@/lib/api-types"
+import { mapUiStatusToApi } from "@/lib/ticket-mappers"
+import { formatFaDate, formatFaDateTime, formatFaTime, parseServerDate } from "@/lib/datetime"
 
-const statusColors: Record<TicketStatus, string> = {
+const statusColors: Record<string, string> = {
   Submitted: "bg-blue-100 text-blue-800 border-blue-200",
-  Viewed: "bg-purple-100 text-purple-800 border-purple-200",
+  SeenRead: "bg-purple-100 text-purple-800 border-purple-200",
   Open: "bg-red-100 text-red-800 border-red-200",
   InProgress: "bg-yellow-100 text-yellow-800 border-yellow-200",
+  Solved: "bg-green-100 text-green-800 border-green-200",
+  Redo: "bg-orange-100 text-orange-800 border-orange-200",
+  Answered: "bg-teal-100 text-teal-800 border-teal-200",
   Resolved: "bg-green-100 text-green-800 border-green-200",
   Closed: "bg-gray-100 text-gray-800 border-gray-200",
 }
 
 const statusLabels: Record<TicketStatus, string> = TICKET_STATUS_LABELS
 
-const statusIcons: Record<TicketStatus, LucideIcon> = {
+const statusIcons: Record<string, LucideIcon> = {
   Submitted: AlertCircle,
-  Viewed: Eye,
+  SeenRead: Eye,
   Open: AlertCircle,
   InProgress: Clock,
+  Solved: CheckCircle,
+  Redo: AlertCircle,
+  Answered: CheckCircle,
   Resolved: CheckCircle,
   Closed: XCircle,
 }
@@ -84,12 +108,107 @@ const getCategoryLabel = (ticketOrId: any) => {
   return categoryLabels[id] ?? id
 }
 
+type CanonicalStatus = "open" | "seen" | "review" | "in_progress" | "solved" | "other"
+
+const normalizeStatus = (input: unknown): CanonicalStatus => {
+  if (!input) return "other"
+  const raw = String(input).toLowerCase()
+  if (raw.includes("open") || raw === "submitted") return "open"
+  if (raw.includes("seen")) return "seen"
+  if (raw.includes("redo") || raw.includes("review")) return "review"
+  if (raw.includes("progress")) return "in_progress"
+  if (raw.includes("resolved") || raw.includes("solved") || raw.includes("closed")) return "solved"
+  return "other"
+}
+
+type AssignedTechnicianItem = {
+  id?: string
+  userId?: string
+  name?: string
+  fullName?: string
+  role?: string
+  isSupervisor?: boolean
+  isActive?: boolean
+}
+
+const normalizeNameList = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value
+      .flatMap((item) => (typeof item === "string" ? [item] : []))
+      .map((item) => item.trim())
+      .filter(Boolean)
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    if (!trimmed) return []
+    return trimmed
+      .split(/[\n,]/g)
+      .map((item) => item.trim())
+      .filter(Boolean)
+  }
+  return []
+}
+
+const normalizeAssignedTechnicians = (ticket: any): AssignedTechnicianItem[] => {
+  const raw = ticket?.assignedTechnicians ?? ticket?.technicians ?? ticket?.technician
+
+  if (Array.isArray(raw)) {
+    return raw
+      .map((item: any) => {
+        if (typeof item === "string") {
+          return { name: item }
+        }
+        if (item && typeof item === "object") {
+          return {
+            id: item.id,
+            userId: item.userId ?? item.technicianUserId,
+            name: item.name ?? item.technicianName,
+            fullName: item.fullName,
+            role: item.role,
+            isSupervisor: item.isSupervisor,
+            isActive: item.isActive,
+          }
+        }
+        return null
+      })
+      .filter(Boolean)
+  }
+
+  if (raw && typeof raw === "object") {
+    return [
+      {
+        id: raw.id,
+        userId: raw.userId ?? raw.technicianUserId,
+        name: raw.name ?? raw.technicianName,
+        fullName: raw.fullName,
+        role: raw.role,
+        isSupervisor: raw.isSupervisor,
+        isActive: raw.isActive,
+      },
+    ]
+  }
+
+  const rawNames = normalizeNameList(
+    ticket?.assignedTechnicianName ??
+      ticket?.technicianName ??
+      ticket?.assignedTechnicians ??
+      ticket?.technicians ??
+      ticket?.technician
+  )
+  if (rawNames.length > 0) {
+    return rawNames.map((name) => ({ name }))
+  }
+
+  return []
+}
+
 interface AdminTicketListProps {
   tickets: any[]
   onTicketUpdate: (ticketId: string, updates: any) => void
+  authToken?: string | null
 }
 
-export function AdminTicketList({ tickets, onTicketUpdate }: AdminTicketListProps) {
+export function AdminTicketList({ tickets, onTicketUpdate, authToken }: AdminTicketListProps) {
   const [searchQuery, setSearchQuery] = useState("")
   const [filterStatus, setFilterStatus] = useState("all")
   const [filterPriority, setFilterPriority] = useState("all")
@@ -97,6 +216,24 @@ export function AdminTicketList({ tickets, onTicketUpdate }: AdminTicketListProp
   const [selectedTickets, setSelectedTickets] = useState<string[]>([])
   const [selectedTicket, setSelectedTicket] = useState<any>(null)
   const [viewDialogOpen, setViewDialogOpen] = useState(false)
+  const [previewMessages, setPreviewMessages] = useState<ApiTicketMessageDto[] | null>(null)
+  const [previewMessagesLoading, setPreviewMessagesLoading] = useState(false)
+  const [replyMessage, setReplyMessage] = useState("")
+  const [replyStatus, setReplyStatus] = useState<TicketStatus>("Open")
+  const [replySubmitting, setReplySubmitting] = useState(false)
+  const [assignDialogOpen, setAssignDialogOpen] = useState(false)
+  const [assignTicket, setAssignTicket] = useState<any>(null)
+  const [assignLoading, setAssignLoading] = useState(false)
+  const [assignError, setAssignError] = useState<string | null>(null)
+  const [directoryLoading, setDirectoryLoading] = useState(false)
+  const [directoryError, setDirectoryError] = useState<string | null>(null)
+  const [directoryItems, setDirectoryItems] = useState<ApiAdminTechnicianDirectoryItemDto[]>([])
+  const [directorySearch, setDirectorySearch] = useState("")
+  const [directoryFilter, setDirectoryFilter] = useState<"all" | "Free" | "Busy" | "expertise">("all")
+  const [expertiseCategoryId, setExpertiseCategoryId] = useState<number | null>(null)
+  const [expertiseSubcategoryId, setExpertiseSubcategoryId] = useState<number | null>(null)
+  const [selectedTechnicians, setSelectedTechnicians] = useState<string[]>([])
+  const [autoAssigning, setAutoAssigning] = useState<Record<string, boolean>>({})
 
   // Filter tickets based on search and filters
   const filteredTickets = tickets.filter((ticket) => {
@@ -106,17 +243,272 @@ export function AdminTicketList({ tickets, onTicketUpdate }: AdminTicketListProp
       ticket.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
       ticket.clientName.toLowerCase().includes(searchQuery.toLowerCase())
 
-    const matchesStatus = filterStatus === "all" || ticket.status === filterStatus
+    const matchesStatus = filterStatus === "all" || (ticket.displayStatus ?? ticket.status) === filterStatus
     const matchesPriority = filterPriority === "all" || ticket.priority === filterPriority
     const matchesCategory = filterCategory === "all" || ticket.category === filterCategory
 
     return matchesSearch && matchesStatus && matchesPriority && matchesCategory
   })
 
+  const loadTechnicianDirectory = async () => {
+    if (!authToken) return
+    setDirectoryLoading(true)
+    setDirectoryError(null)
+    try {
+      const items = await getAdminTechnicianDirectory(authToken, {
+        search: directorySearch.trim() || undefined,
+        availability: directoryFilter === "expertise" ? "all" : directoryFilter,
+        categoryId: directoryFilter === "expertise" ? expertiseCategoryId ?? undefined : undefined,
+        subcategoryId: directoryFilter === "expertise" ? expertiseSubcategoryId ?? undefined : undefined,
+      })
+      setDirectoryItems(items)
+    } catch (error: any) {
+      setDirectoryError(error?.message || "خطا در دریافت فهرست تکنسین‌ها")
+    } finally {
+      setDirectoryLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!assignDialogOpen) return
+    loadTechnicianDirectory()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assignDialogOpen, directorySearch, directoryFilter, expertiseCategoryId, expertiseSubcategoryId])
+
+  const directoryCategories = useMemo(() => {
+    const map = new Map<number, { id: number; name: string }>()
+    directoryItems.forEach((item) => {
+      item.expertise?.forEach((tag) => {
+        map.set(tag.categoryId, { id: tag.categoryId, name: tag.categoryName })
+      })
+    })
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name))
+  }, [directoryItems])
+
+  const directorySubcategories = useMemo(() => {
+    if (!expertiseCategoryId) return []
+    const map = new Map<number, { id: number; name: string }>()
+    directoryItems.forEach((item) => {
+      item.expertise?.forEach((tag) => {
+        if (tag.categoryId === expertiseCategoryId) {
+          map.set(tag.subcategoryId, { id: tag.subcategoryId, name: tag.subcategoryName })
+        }
+      })
+    })
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name))
+  }, [directoryItems, expertiseCategoryId])
+
   const handleViewTicket = (ticket: any) => {
-    console.log("Opening ticket preview for:", ticket.id) 
     setSelectedTicket(ticket)
+    setReplyMessage("")
+    setPreviewMessages(null)
+    setReplyStatus((ticket.displayStatus ?? ticket.status) as TicketStatus ?? "Open")
     setViewDialogOpen(true)
+  }
+
+  // Fetch full conversation when preview dialog opens (all messages, all roles)
+  useEffect(() => {
+    if (!viewDialogOpen || !selectedTicket?.id || !authToken) return
+    setPreviewMessagesLoading(true)
+    apiRequest<ApiTicketMessageDto[]>(`/api/tickets/${selectedTicket.id}/messages`, {
+      method: "GET",
+      token: authToken,
+    })
+      .then((list) => setPreviewMessages(list ?? []))
+      .catch(() => setPreviewMessages([]))
+      .finally(() => setPreviewMessagesLoading(false))
+  }, [viewDialogOpen, selectedTicket?.id, authToken])
+
+  const handleOpenAssignDialog = (ticket: any) => {
+    setAssignTicket(ticket)
+    setAssignError(null)
+    setSelectedTechnicians([])
+    setDirectoryFilter("all")
+    setDirectorySearch("")
+    setExpertiseCategoryId(null)
+    setExpertiseSubcategoryId(null)
+    setAssignDialogOpen(true)
+  }
+
+  const handleAutoAssign = async (ticket: any) => {
+    if (!authToken) {
+      toast({
+        title: "عدم دسترسی",
+        description: "لطفاً دوباره وارد شوید.",
+        variant: "destructive",
+      })
+      return
+    }
+    setAutoAssigning((prev) => ({ ...prev, [ticket.id]: true }))
+    try {
+      const existingIds = (ticket.assignedTechnicians ?? []).map((t: any) => t.technicianUserId)
+      const result = await autoAssignAdminTicket(authToken, ticket.id, {
+        categoryId: ticket.categoryId,
+        subcategoryId: ticket.subcategoryId,
+        existingTechnicianUserIds: existingIds,
+      })
+      onTicketUpdate(ticket.id, {
+        assignedTechnicians: result.assignees,
+        assignedTechnicianName: result.assignees?.[0]?.name ?? null,
+      })
+      toast({
+        title: "تخصیص انجام شد",
+        description: result.addedTechnicians?.length
+          ? `${result.addedTechnicians.length} تکنسین به تیکت اضافه شد.`
+          : "تکنسین جدیدی برای تخصیص یافت نشد.",
+      })
+    } catch (error: any) {
+      const message = error?.body?.message || error?.message || "خطا در تخصیص خودکار"
+      toast({
+        title: "تخصیص ناموفق بود",
+        description: message,
+        variant: "destructive",
+      })
+    } finally {
+      setAutoAssigning((prev) => ({ ...prev, [ticket.id]: false }))
+    }
+  }
+
+  const handleManualAssign = async () => {
+    if (!assignTicket?.id) return
+    if (!authToken) {
+      toast({
+        title: "عدم دسترسی",
+        description: "لطفاً دوباره وارد شوید.",
+        variant: "destructive",
+      })
+      return
+    }
+    const alreadyAssigned = new Set(
+      (assignTicket.assignedTechnicians ?? []).map((t: any) => t.technicianUserId)
+    )
+    const targetIds = selectedTechnicians.filter((id) => !alreadyAssigned.has(id))
+    if (targetIds.length === 0) {
+      toast({
+        title: "انتخابی وجود ندارد",
+        description: "تکنسین جدیدی برای تخصیص انتخاب نشده است.",
+      })
+      return
+    }
+    setAssignLoading(true)
+    setAssignError(null)
+    try {
+      const result = await manualAssignAdminTicket(
+        authToken,
+        assignTicket.id,
+        targetIds,
+        Array.from(alreadyAssigned)
+      )
+      onTicketUpdate(assignTicket.id, {
+        assignedTechnicians: result.assignees,
+        assignedTechnicianName: result.assignees?.[0]?.name ?? null,
+      })
+      toast({
+        title: "تخصیص انجام شد",
+        description: `${result.addedTechnicians?.length ?? 0} تکنسین به تیکت اضافه شد.`,
+      })
+      setAssignDialogOpen(false)
+    } catch (error: any) {
+      const message = error?.body?.message || error?.message || "خطا در تخصیص دستی"
+      setAssignError(message)
+    } finally {
+      setAssignLoading(false)
+    }
+  }
+
+  const handleReplySubmit = async () => {
+    if (!selectedTicket?.id) return
+    if (!authToken) {
+      toast({
+        title: "عدم دسترسی",
+        description: "لطفاً دوباره وارد شوید.",
+        variant: "destructive",
+      })
+      return
+    }
+    if (!replyMessage.trim()) {
+      toast({
+        title: "پیام خالی است",
+        description: "لطفاً متن پاسخ را وارد کنید.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setReplySubmitting(true)
+      await apiRequest(`/api/tickets/${selectedTicket.id}/messages`, {
+        method: "POST",
+        token: authToken,
+        body: {
+          message: replyMessage.trim(),
+          status: mapUiStatusToApi(replyStatus),
+        },
+      })
+      setSelectedTicket((prev: any) =>
+        prev ? { ...prev, status: replyStatus, updatedAt: new Date().toISOString() } : prev
+      )
+      setReplyMessage("")
+      const list = await apiRequest<ApiTicketMessageDto[]>(`/api/tickets/${selectedTicket.id}/messages`, {
+        method: "GET",
+        token: authToken,
+      })
+      setPreviewMessages(list ?? [])
+      toast({
+        title: "پاسخ ارسال شد",
+        description: "پاسخ و وضعیت با موفقیت ثبت شد.",
+      })
+    } catch (error: any) {
+      const message = error?.body?.message || error?.message || "لطفاً دوباره تلاش کنید."
+      toast({
+        title: "ارسال پاسخ ناموفق بود",
+        description: message,
+        variant: "destructive",
+      })
+    } finally {
+      setReplySubmitting(false)
+    }
+  }
+
+  const handleStatusUpdate = async () => {
+    if (!selectedTicket?.id) return
+    if (!authToken) {
+      toast({
+        title: "عدم دسترسی",
+        description: "لطفاً دوباره وارد شوید.",
+        variant: "destructive",
+      })
+      return
+    }
+    if (replyStatus === selectedTicket.status) {
+      toast({
+        title: "بدون تغییر",
+        description: "وضعیت جدید با وضعیت فعلی یکسان است.",
+      })
+      return
+    }
+    try {
+      await apiRequest(`/api/tickets/${selectedTicket.id}`, {
+        method: "PATCH",
+        token: authToken,
+        body: { status: mapUiStatusToApi(replyStatus) },
+      })
+      onTicketUpdate(selectedTicket.id, { status: replyStatus })
+      setSelectedTicket((prev: any) =>
+        prev ? { ...prev, status: replyStatus, updatedAt: new Date().toISOString() } : prev
+      )
+      toast({
+        title: "وضعیت ثبت شد",
+        description: "وضعیت تیکت با موفقیت به‌روزرسانی شد.",
+      })
+    } catch (error: any) {
+      const message = error?.body?.message || error?.message || "لطفاً دوباره تلاش کنید."
+      toast({
+        title: "ثبت وضعیت ناموفق بود",
+        description: message,
+        variant: "destructive",
+      })
+    }
   }
 
   const handleSelectTicket = (ticketId: string, checked: boolean) => {
@@ -147,6 +539,20 @@ export function AdminTicketList({ tickets, onTicketUpdate }: AdminTicketListProp
   }
 
   const handlePrint = () => {
+    const reportRows = filteredTickets
+    const counts = reportRows.reduce(
+      (acc, ticket) => {
+        const statusKey = normalizeStatus(ticket.displayStatus ?? ticket.status)
+        if (statusKey === "open") acc.open += 1
+        else if (statusKey === "seen") acc.seen += 1
+        else if (statusKey === "review") acc.review += 1
+        else if (statusKey === "in_progress") acc.inProgress += 1
+        else if (statusKey === "solved") acc.solved += 1
+        return acc
+      },
+      { open: 0, seen: 0, review: 0, inProgress: 0, solved: 0 },
+    )
+
     const printContent = `
       <!DOCTYPE html>
       <html dir="rtl" lang="fa">
@@ -162,9 +568,11 @@ export function AdminTicketList({ tickets, onTicketUpdate }: AdminTicketListProp
           th, td { border: 1px solid #ddd; padding: 8px; text-align: right; }
           th { background-color: #f5f5f5; font-weight: bold; }
           .status-open { background-color: #fee2e2; color: #991b1b; }
-          .status-in-progress { background-color: #fef3c7; color: #92400e; }
-          .status-resolved { background-color: #d1fae5; color: #065f46; }
-          .status-closed { background-color: #f3f4f6; color: #374151; }
+          .status-seen { background-color: #e0f2fe; color: #075985; }
+          .status-review { background-color: #fde68a; color: #92400e; }
+          .status-in_progress { background-color: #fef3c7; color: #92400e; }
+          .status-solved { background-color: #d1fae5; color: #065f46; }
+          .status-other { background-color: #f3f4f6; color: #374151; }
           .priority-urgent { background-color: #fce7f3; color: #be185d; }
           .priority-high { background-color: #fee2e2; color: #991b1b; }
           .priority-medium { background-color: #fed7aa; color: #c2410c; }
@@ -175,25 +583,33 @@ export function AdminTicketList({ tickets, onTicketUpdate }: AdminTicketListProp
       <body>
         <div class="header">
           <h1>گزارش تیکت‌های سیستم مدیریت خدمات IT</h1>
-          <p>تاریخ تولید گزارش: ${new Date().toLocaleDateString("fa-IR")}</p>
+          <p>تاریخ تولید گزارش: ${formatFaDate(new Date())}</p>
         </div>
         
         <div class="stats">
           <div class="stat-box">
             <h3>کل تیکت‌ها</h3>
-            <p>${tickets.length}</p>
+            <p>${reportRows.length}</p>
           </div>
           <div class="stat-box">
             <h3>باز</h3>
-            <p>${tickets.filter((t) => t.status === "Open").length}</p>
+            <p>${counts.open}</p>
+          </div>
+          <div class="stat-box">
+            <h3>مشاهده شده</h3>
+            <p>${counts.seen}</p>
+          </div>
+          <div class="stat-box">
+            <h3>بازبینی</h3>
+            <p>${counts.review}</p>
           </div>
           <div class="stat-box">
             <h3>در حال انجام</h3>
-            <p>${tickets.filter((t) => t.status === "InProgress").length}</p>
+            <p>${counts.inProgress}</p>
           </div>
           <div class="stat-box">
             <h3>حل شده</h3>
-            <p>${tickets.filter((t) => t.status === "Resolved" || t.status === "Closed").length}</p>
+            <p>${counts.solved}</p>
           </div>
         </div>
 
@@ -211,20 +627,23 @@ export function AdminTicketList({ tickets, onTicketUpdate }: AdminTicketListProp
             </tr>
           </thead>
           <tbody>
-            ${filteredTickets
+            ${reportRows
               .map(
-                (ticket) => `
+                (ticket) => {
+                  const normalizedStatus = normalizeStatus(ticket.displayStatus ?? ticket.status)
+                  return `
               <tr>
                 <td>${ticket.id}</td>
                 <td>${ticket.title}</td>
-                <td class="status-${ticket.status}">${statusLabels[ticket.status]}</td>
+                <td class="status-${normalizedStatus}">${getTicketStatusLabel(ticket.displayStatus ?? ticket.status, "admin")}</td>
                 <td class="priority-${ticket.priority}">${priorityLabels[ticket.priority]}</td>
                 <td>${getCategoryLabel(ticket)}</td>
                 <td>${ticket.clientName}</td>
                 <td>${ticket.assignedTechnicianName || "تعیین نشده"}</td>
-                <td>${new Date(ticket.createdAt).toLocaleDateString("fa-IR")}</td>
+                <td>${formatSafeDate(ticket.createdAt)}</td>
               </tr>
-            `,
+            `
+                },
               )
               .join("")}
           </tbody>
@@ -261,14 +680,14 @@ export function AdminTicketList({ tickets, onTicketUpdate }: AdminTicketListProp
         [
           ticket.id,
           `"${ticket.title}"`,
-          statusLabels[ticket.status],
+          getTicketStatusLabel(ticket.displayStatus ?? ticket.status, "admin"),
           priorityLabels[ticket.priority],
           getCategoryLabel(ticket),
           `"${ticket.clientName}"`,
           ticket.clientEmail,
           `"${ticket.assignedTechnicianName || "تعیین نشده"}"`,
-          new Date(ticket.createdAt).toLocaleDateString("fa-IR"),
-          new Date(ticket.updatedAt).toLocaleDateString("fa-IR"),
+          formatSafeDate(ticket.createdAt),
+          formatSafeDate(ticket.updatedAt),
         ].join(","),
       ),
     ].join("\n")
@@ -289,13 +708,22 @@ export function AdminTicketList({ tickets, onTicketUpdate }: AdminTicketListProp
     })
   }
 
-  const formatDateTime = (dateString: string) => {
-    const date = new Date(dateString)
+  const formatDateTime = (input: unknown) => {
+    const parsed = parseServerDate(input)
+    if (!parsed || Number.isNaN(parsed.getTime())) {
+      if (process.env.NODE_ENV === "development") {
+        console.warn("[AdminTicketList] Invalid date value:", input)
+      }
+      return { date: "—", time: "—", dateTime: "—" }
+    }
     return {
-      date: date.toLocaleDateString("fa-IR"),
-      time: date.toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit" }),
+      date: formatFaDate(parsed),
+      time: formatFaTime(parsed),
+      dateTime: formatFaDateTime(parsed),
     }
   }
+
+  const formatSafeDate = (input: unknown) => formatDateTime(input).date
 
   return (
     <div className="space-y-6 font-iran" dir="rtl">
@@ -418,9 +846,9 @@ export function AdminTicketList({ tickets, onTicketUpdate }: AdminTicketListProp
             </div>
           )}
 
-          {/* Tickets Table */}
-          <div className="border rounded-lg overflow-hidden">
-            <Table>
+          {/* Tickets Table - horizontal scroll on small screens */}
+          <div className="border rounded-lg overflow-x-auto">
+            <Table className="min-w-[700px]">
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-12">
@@ -444,10 +872,15 @@ export function AdminTicketList({ tickets, onTicketUpdate }: AdminTicketListProp
                 {filteredTickets.length > 0 ? (
                   filteredTickets.map((ticket) => {
                     const isSelected = selectedTickets.includes(ticket.id)
+                    const assignedTechnicians = normalizeAssignedTechnicians(ticket)
 
                     return (
-                      <TableRow key={ticket.id} className={isSelected ? "bg-muted/50" : ""}>
-                        <TableCell>
+                      <TableRow
+                        key={ticket.id}
+                        className={`cursor-pointer hover:bg-muted/50 ${isSelected ? "bg-muted/50" : ""}`}
+                        onClick={() => handleViewTicket(ticket)}
+                      >
+                        <TableCell onClick={(e) => e.stopPropagation()}>
                           <Checkbox
                             checked={isSelected}
                             onCheckedChange={(checked) => handleSelectTicket(ticket.id, checked as boolean)}
@@ -460,8 +893,8 @@ export function AdminTicketList({ tickets, onTicketUpdate }: AdminTicketListProp
                           </div>
                         </TableCell>
                         <TableCell>
-                          <Badge className={`${statusColors[ticket.status]} font-iran`}>
-                            {statusLabels[ticket.status]}
+                          <Badge className={`${statusColors[ticket.displayStatus ?? ticket.status]} font-iran`}>
+                            {getTicketStatusLabel(ticket.displayStatus ?? ticket.status, "admin")}
                           </Badge>
                         </TableCell>
                         <TableCell>
@@ -486,32 +919,52 @@ export function AdminTicketList({ tickets, onTicketUpdate }: AdminTicketListProp
                           </div>
                         </TableCell>
                         <TableCell>
-                          {ticket.assignedTechnicianName ? (
-                            <div className="flex items-center gap-2">
-                              <Avatar className="w-6 h-6">
-                                <AvatarFallback className="text-xs font-iran">
-                                  {ticket.assignedTechnicianName.charAt(0)}
-                                </AvatarFallback>
-                              </Avatar>
-                              <span className="text-sm font-iran">{ticket.assignedTechnicianName}</span>
-                            </div>
-                          ) : (
-                            <span className="text-sm text-muted-foreground font-iran">تعیین نشده</span>
-                          )}
+                          <AssignedTechniciansCell
+                            technicians={assignedTechnicians}
+                            emptyLabel="بدون تکنسین"
+                          />
                         </TableCell>
                         <TableCell className="text-sm font-iran">
-                          {new Date(ticket.createdAt).toLocaleDateString("fa-IR")}
+                          {formatSafeDate(ticket.createdAt)}
                         </TableCell>
-                        <TableCell>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleViewTicket(ticket)}
-                            className="gap-1 font-iran hover:bg-blue-50 hover:text-blue-600"
-                          >
-                            <Eye className="w-3 h-3" />
-                            مشاهده
-                          </Button>
+                        <TableCell onClick={(e) => e.stopPropagation()}>
+                          <div className="flex flex-col gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleViewTicket(ticket)
+                              }}
+                              className="gap-1 font-iran"
+                            >
+                              <Eye className="w-3 h-3" />
+                              مشاهده
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleAutoAssign(ticket)
+                              }}
+                              disabled={autoAssigning[ticket.id]}
+                              className="gap-1 font-iran"
+                            >
+                              {autoAssigning[ticket.id] ? "در حال تخصیص..." : "خودکار"}
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleOpenAssignDialog(ticket)
+                              }}
+                              className="gap-1 font-iran"
+                            >
+                              دستی
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     )
@@ -534,7 +987,7 @@ export function AdminTicketList({ tickets, onTicketUpdate }: AdminTicketListProp
 
       {/* Enhanced View Ticket Dialog */}
       <Dialog open={viewDialogOpen} onOpenChange={setViewDialogOpen}>
-        <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto font-iran" dir="rtl">
+        <DialogContent className="max-h-[85vh] overflow-y-auto w-[95vw] sm:w-[90vw] md:max-w-6xl font-iran" dir="rtl">
           <DialogHeader>
             <DialogTitle className="text-right font-iran text-xl">پیش‌نمایش تیکت {selectedTicket?.id}</DialogTitle>
           </DialogHeader>
@@ -546,9 +999,14 @@ export function AdminTicketList({ tickets, onTicketUpdate }: AdminTicketListProp
                   <div className="text-right space-y-3">
                     <h2 className="text-2xl font-bold font-iran text-gray-900">{selectedTicket.title}</h2>
                     <div className="flex gap-3 items-center">
-                      <Badge className={`${statusColors[selectedTicket.status]} font-iran text-sm px-3 py-1`}>
-                        {React.createElement(statusIcons[selectedTicket.status], { className: "w-4 h-4 ml-1" })}
-                        {statusLabels[selectedTicket.status]}
+                      <Badge
+                        className={`${statusColors[selectedTicket.status] ?? statusColors.Open} font-iran text-sm px-3 py-1`}
+                      >
+                        {React.createElement(
+                          statusIcons[selectedTicket.status] ?? AlertCircle,
+                          { className: "w-4 h-4 ml-1" }
+                        )}
+                        {getTicketStatusLabel(selectedTicket.status, "admin")}
                       </Badge>
                       <Badge className={`${priorityColors[selectedTicket.priority]} font-iran text-sm px-3 py-1`}>
                         {priorityLabels[selectedTicket.priority]}
@@ -637,64 +1095,81 @@ export function AdminTicketList({ tickets, onTicketUpdate }: AdminTicketListProp
                     </Card>
                   )}
 
-                  {/* Responses and Updates */}
-                  {selectedTicket.responses && selectedTicket.responses.length > 0 && (
-                    <Card>
-                      <CardHeader>
-                        <CardTitle className="flex items-center gap-2 text-right font-iran">
-                          <MessageSquare className="w-5 h-5 text-orange-600" />
-                          پاسخ‌ها و به‌روزرسانی‌ها ({selectedTicket.responses.length})
-                        </CardTitle>
-                      </CardHeader>
-                      <CardContent>
+                  {/* Conversation: full thread (client + technician + admin + supervisor) */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-right font-iran">
+                        <MessageSquare className="w-5 h-5 text-orange-600" />
+                        مکالمه
+                        {previewMessages && previewMessages.length > 0 && (
+                          <span className="text-sm font-normal text-muted-foreground">
+                            ({previewMessages.length})
+                          </span>
+                        )}
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      {previewMessagesLoading ? (
+                        <div className="py-8 text-center text-muted-foreground font-iran">
+                          در حال بارگذاری مکالمه...
+                        </div>
+                      ) : !previewMessages || previewMessages.length === 0 ? (
+                        <div className="py-8 text-center text-muted-foreground font-iran border border-dashed rounded-lg">
+                          هنوز پیامی ثبت نشده است
+                        </div>
+                      ) : (
                         <div className="space-y-4">
-                          {selectedTicket.responses.map((response: any, index: number) => {
-                            const responseDateTime = formatDateTime(response.timestamp)
-                            const StatusIcon = statusIcons[response.status]
-
+                          {previewMessages.map((msg) => {
+                            const msgDateTime = formatDateTime(msg.createdAt)
+                            const roleLabel =
+                              msg.authorRole === "Client"
+                                ? "درخواست‌کننده"
+                                : msg.authorRole === "Technician"
+                                  ? "تکنسین"
+                                  : msg.authorRole === "Admin"
+                                    ? "مدیر"
+                                    : msg.authorRole === "Supervisor"
+                                      ? "سرپرست"
+                                      : msg.authorRole ?? "—"
                             return (
-                              <div key={index} className="border rounded-lg p-4 bg-white shadow-sm">
+                              <div key={msg.id} className="border rounded-lg p-4 bg-white shadow-sm">
                                 <div className="flex justify-between items-start mb-3">
                                   <div className="flex items-center gap-3">
                                     <Avatar className="w-8 h-8">
                                       <AvatarFallback className="text-sm font-iran">
-                                        {response.authorName?.charAt(0) || "T"}
+                                        {msg.authorName?.charAt(0) || "?"}
                                       </AvatarFallback>
                                     </Avatar>
                                     <div className="text-right">
-                                      <p className="font-medium text-sm font-iran">{response.authorName}</p>
-                                      <p className="text-xs text-muted-foreground font-iran">تکنسین</p>
+                                      <p className="font-medium text-sm font-iran">{msg.authorName}</p>
+                                      <Badge variant="secondary" className="text-xs font-iran mt-1">
+                                        {roleLabel}
+                                      </Badge>
                                     </div>
                                   </div>
-                                  <div className="text-left space-y-2">
-                                    <Badge className={`${statusColors[response.status]} font-iran text-xs`}>
-                                      <StatusIcon className="w-3 h-3 ml-1" />
-                                      {statusLabels[response.status]}
-                                    </Badge>
-                                    <div className="text-xs text-muted-foreground font-iran">
-                                      <div className="flex items-center gap-1 justify-end">
-                                        <Calendar className="w-3 h-3" />
-                                        <span>{responseDateTime.date}</span>
-                                      </div>
-                                      <div className="flex items-center gap-1 justify-end mt-1">
-                                        <Clock className="w-3 h-3" />
-                                        <span>{responseDateTime.time}</span>
-                                      </div>
+                                  <div className="text-left text-xs text-muted-foreground font-iran">
+                                    <div className="flex items-center gap-1 justify-end">
+                                      <Calendar className="w-3 h-3" />
+                                      <span>{msgDateTime.date}</span>
+                                    </div>
+                                    <div className="flex items-center gap-1 justify-end mt-1">
+                                      <Clock className="w-3 h-3" />
+                                      <span>{msgDateTime.time}</span>
                                     </div>
                                   </div>
                                 </div>
-                                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                                <div className="bg-muted/50 border rounded-lg p-3">
                                   <p className="whitespace-pre-wrap text-right font-iran text-sm leading-relaxed">
-                                    {response.message}
+                                    {msg.message}
                                   </p>
                                 </div>
                               </div>
                             )
                           })}
                         </div>
-                      </CardContent>
-                    </Card>
-                  )}
+                      )}
+                    </CardContent>
+                  </Card>
                 </div>
 
                 {/* Right Column - Sidebar Info */}
@@ -818,6 +1293,67 @@ export function AdminTicketList({ tickets, onTicketUpdate }: AdminTicketListProp
                     </Card>
                   )}
 
+                  {/* Reply + Status */}
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-right font-iran">
+                        <MessageSquare className="w-5 h-5 text-blue-600" />
+                        پاسخ و تغییر وضعیت
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="space-y-2">
+                        <label className="text-sm font-iran text-muted-foreground">وضعیت</label>
+                        <Select
+                          value={replyStatus}
+                          onValueChange={(value) => setReplyStatus(value as TicketStatus)}
+                        >
+                          <SelectTrigger className="text-right font-iran">
+                            <SelectValue placeholder="انتخاب وضعیت" />
+                          </SelectTrigger>
+                          <SelectContent dir="rtl" className="font-iran">
+                            {TICKET_STATUS_OPTIONS.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="text-sm font-iran text-muted-foreground">متن پاسخ</label>
+                        <Textarea
+                          value={replyMessage}
+                          onChange={(event) => setReplyMessage(event.target.value)}
+                          className="min-h-[120px] text-right font-iran"
+                          placeholder="پاسخ خود را بنویسید..."
+                        />
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          onClick={handleReplySubmit}
+                          disabled={replySubmitting}
+                          className="font-iran gap-2"
+                        >
+                          <MessageSquare className="w-4 h-4" />
+                          {replySubmitting ? "در حال ارسال..." : "ارسال پاسخ"}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={handleStatusUpdate}
+                          className="font-iran gap-2"
+                        >
+                          <Settings className="w-4 h-4" />
+                          ثبت وضعیت
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+
                   {/* Quick Actions */}
                   <Card>
                     <CardHeader>
@@ -874,6 +1410,213 @@ export function AdminTicketList({ tickets, onTicketUpdate }: AdminTicketListProp
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={assignDialogOpen} onOpenChange={setAssignDialogOpen}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto w-[95vw] sm:w-[90vw] md:max-w-4xl font-iran text-right" dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="text-right font-iran">تخصیص تکنسین</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            {assignTicket ? (
+              <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+                <div className="font-iran">{assignTicket.title}</div>
+                <div className="text-xs text-muted-foreground">
+                  شناسه: <span className="font-mono">{assignTicket.id}</span>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  دسته‌بندی: {getCategoryLabel(assignTicket)} {assignTicket.subcategory ? `- ${assignTicket.subcategory}` : ""}
+                </div>
+              </div>
+            ) : null}
+
+            <Input
+              value={directorySearch}
+              onChange={(event) => setDirectorySearch(event.target.value)}
+              placeholder="جستجوی تکنسین..."
+              className="text-right font-iran"
+            />
+
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              <Button
+                type="button"
+                variant={directoryFilter === "all" ? "default" : "outline"}
+                className="font-iran"
+                onClick={() => {
+                  setDirectoryFilter("all")
+                  setExpertiseCategoryId(null)
+                  setExpertiseSubcategoryId(null)
+                }}
+              >
+                همه
+              </Button>
+              <Button
+                type="button"
+                variant={directoryFilter === "Free" ? "default" : "outline"}
+                className="font-iran"
+                onClick={() => {
+                  setDirectoryFilter("Free")
+                  setExpertiseCategoryId(null)
+                  setExpertiseSubcategoryId(null)
+                }}
+              >
+                آزاد
+              </Button>
+              <Button
+                type="button"
+                variant={directoryFilter === "Busy" ? "default" : "outline"}
+                className="font-iran"
+                onClick={() => {
+                  setDirectoryFilter("Busy")
+                  setExpertiseCategoryId(null)
+                  setExpertiseSubcategoryId(null)
+                }}
+              >
+                پرمشغله
+              </Button>
+              <Button
+                type="button"
+                variant={directoryFilter === "expertise" ? "default" : "outline"}
+                className="font-iran"
+                onClick={() => setDirectoryFilter("expertise")}
+              >
+                تخصص
+              </Button>
+            </div>
+
+            {directoryFilter === "expertise" ? (
+              <div className="space-y-2">
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  {directoryCategories.length === 0 ? (
+                    <span className="text-xs text-muted-foreground">دسته‌بندی‌ای یافت نشد.</span>
+                  ) : (
+                    directoryCategories.map((cat) => (
+                      <Button
+                        key={cat.id}
+                        type="button"
+                        variant={expertiseCategoryId === cat.id ? "default" : "outline"}
+                        className="text-xs font-iran"
+                        onClick={() => {
+                          setExpertiseCategoryId(cat.id)
+                          setExpertiseSubcategoryId(null)
+                        }}
+                      >
+                        {cat.name}
+                      </Button>
+                    ))
+                  )}
+                </div>
+                {expertiseCategoryId ? (
+                  <div className="flex gap-2 overflow-x-auto pb-1">
+                    <Button
+                      type="button"
+                      variant={expertiseSubcategoryId === null ? "default" : "outline"}
+                      className="text-xs font-iran"
+                      onClick={() => setExpertiseSubcategoryId(null)}
+                    >
+                      همه زیردسته‌ها
+                    </Button>
+                    {directorySubcategories.map((sub) => (
+                      <Button
+                        key={sub.id}
+                        type="button"
+                        variant={expertiseSubcategoryId === sub.id ? "default" : "outline"}
+                        className="text-xs font-iran"
+                        onClick={() => setExpertiseSubcategoryId(sub.id)}
+                      >
+                        {sub.name}
+                      </Button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {directoryLoading ? (
+              <div className="text-sm text-muted-foreground">در حال بارگذاری...</div>
+            ) : directoryError ? (
+              <div className="text-sm text-red-700">{directoryError}</div>
+            ) : directoryItems.length === 0 ? (
+              <div className="text-sm text-muted-foreground">تکنسینی برای نمایش وجود ندارد.</div>
+            ) : (
+              <ScrollArea className="max-h-[60vh]">
+                <div className="space-y-2">
+                  {directoryItems.map((tech) => {
+                    const assignedSet = new Set(
+                      (assignTicket?.assignedTechnicians ?? []).map((t: any) => t.technicianUserId)
+                    )
+                    const isAlreadyAssigned = assignedSet.has(tech.technicianUserId)
+                    const isSelected = selectedTechnicians.includes(tech.technicianUserId)
+
+                    return (
+                      <div
+                        key={tech.technicianUserId}
+                        className="flex flex-col gap-2 rounded-lg border p-3"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <Checkbox
+                              checked={isSelected}
+                              disabled={isAlreadyAssigned}
+                              onCheckedChange={(checked) => {
+                                const isChecked = Boolean(checked)
+                                setSelectedTechnicians((prev) =>
+                                  isChecked
+                                    ? [...prev, tech.technicianUserId]
+                                    : prev.filter((id) => id !== tech.technicianUserId)
+                                )
+                              }}
+                            />
+                            <div>
+                              <div className="font-iran">{tech.name}</div>
+                              <div className="text-xs text-muted-foreground">{tech.email}</div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Badge
+                              variant="outline"
+                              className={`text-xs ${tech.availability === "Free" ? "text-emerald-600" : "text-amber-600"}`}
+                            >
+                              {tech.availability === "Free" ? "آزاد" : "پرمشغله"}
+                            </Badge>
+                            <span className="text-xs text-muted-foreground">
+                              {tech.inboxLeftActiveNonTerminal}/{tech.inboxTotalActive}
+                            </span>
+                          </div>
+                        </div>
+                        {isAlreadyAssigned ? (
+                          <div className="text-xs text-muted-foreground">قبلاً به این تیکت تخصیص داده شده است.</div>
+                        ) : null}
+                        {tech.expertise?.length ? (
+                          <div className="flex flex-wrap gap-2">
+                            {tech.expertise.map((tag) => (
+                              <Badge key={`${tag.categoryId}-${tag.subcategoryId}`} variant="secondary" className="text-xs font-iran">
+                                {tag.categoryName} / {tag.subcategoryName}
+                              </Badge>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-xs text-muted-foreground">تخصصی ثبت نشده است.</div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </ScrollArea>
+            )}
+
+            {assignError ? <div className="text-sm text-red-700">{assignError}</div> : null}
+
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setAssignDialogOpen(false)} className="font-iran">
+                انصراف
+              </Button>
+              <Button onClick={handleManualAssign} disabled={assignLoading} className="font-iran">
+                {assignLoading ? "در حال تخصیص..." : "تخصیص"}
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

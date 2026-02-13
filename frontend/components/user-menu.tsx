@@ -33,12 +33,12 @@ export function UserMenu() {
     }
   }
 
-  const getRoleLabel = (role: string) => {
+  const getRoleLabel = (role: string, isSupervisor?: boolean) => {
     switch (role) {
       case "admin":
         return "مدیر سیستم"
       case "engineer":
-        return "تکنسین"
+        return isSupervisor ? "سرپرست فنی" : "تکنسین"
       default:
         return "کاربر"
     }
@@ -85,7 +85,7 @@ export function UserMenu() {
               <div className="flex items-center gap-2 justify-end">
                 <Badge className={getRoleBadgeColor(user.role)}>
                   <div className="flex items-center gap-1">
-                    <span>{getRoleLabel(user.role)}</span>
+                    <span>{getRoleLabel(user.role, user.isSupervisor)}</span>
                     {getRoleIcon(user.role)}
                   </div>
                 </Badge>

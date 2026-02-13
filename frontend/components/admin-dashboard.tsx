@@ -9,10 +9,10 @@ import { AdminTicketManagement } from "./admin-ticket-management"
 import { AdminTechnicianAssignment } from "./admin-technician-assignment"
 import { CategoryManagement } from "./category-management"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { TicketIcon, UserPlus, FolderTree, Users } from "lucide-react"
+import { TicketIcon, UserPlus, FolderTree, Users, FileDown, Settings } from "lucide-react"
 import { EnhancedAutoAssignment } from "./enhanced-auto-assignment"
-import { Settings } from "lucide-react"
 import { TechnicianManagement } from "./technician-management"
+import { AdminReports } from "./admin-reports"
 
 interface AdminDashboardProps {
   tickets: Ticket[]
@@ -20,7 +20,8 @@ interface AdminDashboardProps {
   technicians: TechnicianProfile[]
   categoriesData: any
   onCategoryUpdate: (categories: any) => void
-  activeSection?: "tickets" | "assignment" | "categories" | "auto-settings" | "technicians"
+  authToken?: string | null
+  activeSection?: "tickets" | "assignment" | "categories" | "auto-settings" | "technicians" | "reports"
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
@@ -29,6 +30,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   technicians,
   categoriesData,
   onCategoryUpdate,
+  authToken,
   activeSection,
 }) => {
   const [activeTab, setActiveTab] = useState("tickets")
@@ -41,7 +43,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   return (
     <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full" dir="rtl">
-      <TabsList className="grid w-full grid-cols-5">
+      <TabsList className="grid w-full grid-cols-6">
         <TabsTrigger value="tickets" className="gap-2">
           <TicketIcon className="w-4 h-4" />
           مدیریت کامل تیکت‌ها
@@ -58,6 +60,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <FolderTree className="w-4 h-4" />
           مدیریت دسته‌بندی
         </TabsTrigger>
+        <TabsTrigger value="reports" className="gap-2">
+          <FileDown className="w-4 h-4" />
+          گزارش‌گیری
+        </TabsTrigger>
         <TabsTrigger value="auto-settings" className="gap-2">
           <Settings className="w-4 h-4" />
           تنظیمات خودکار
@@ -65,11 +71,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       </TabsList>
 
       <TabsContent value="tickets">
-        <AdminTicketManagement tickets={tickets} technicians={technicians} onTicketUpdate={onTicketUpdate} />
+        <AdminTicketManagement
+          technicians={technicians}
+          authToken={authToken}
+          tickets={tickets}
+        />
       </TabsContent>
 
       <TabsContent value="assignment">
-        <AdminTechnicianAssignment tickets={tickets} technicians={technicians} onTicketUpdate={onTicketUpdate} />
+        <AdminTechnicianAssignment
+          tickets={tickets}
+          technicians={technicians}
+          onTicketUpdate={onTicketUpdate}
+          authToken={authToken}
+        />
       </TabsContent>
 
       <TabsContent value="technicians">
@@ -80,8 +95,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         <CategoryManagement categoriesData={categoriesData} onCategoryUpdate={onCategoryUpdate} />
       </TabsContent>
 
+      <TabsContent value="reports">
+        <AdminReports />
+      </TabsContent>
+
       <TabsContent value="auto-settings">
-        <EnhancedAutoAssignment tickets={tickets} technicians={technicians} onTicketUpdate={onTicketUpdate} />
+        <EnhancedAutoAssignment 
+          tickets={tickets} 
+          technicians={technicians} 
+          onTicketUpdate={onTicketUpdate} 
+          onTabChange={setActiveTab}
+        />
       </TabsContent>
     </Tabs>
   )

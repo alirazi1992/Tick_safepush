@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, Page, APIRequestContext } from '@playwright/test';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:5000';
 
@@ -10,9 +10,9 @@ const SEED_USERS = {
 };
 
 // Helper to capture console errors
-function setupConsoleErrorCapture(page: any) {
+function setupConsoleErrorCapture(page: Page) {
   const errors: string[] = [];
-  page.on('console', (msg: any) => {
+  page.on('console', (msg) => {
     if (msg.type() === 'error') {
       errors.push(msg.text());
     }

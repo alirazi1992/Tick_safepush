@@ -91,6 +91,7 @@ public static class SeedData
                 category = new Category
                 {
                     Name = seed.Name,
+                    NormalizedName = NormalizeName(seed.Name),
                     Description = seed.Description,
                     Subcategories = seed.Subs.Select(s => new Subcategory { Name = s }).ToList()
                 };
@@ -98,6 +99,11 @@ public static class SeedData
             }
             else
             {
+                if (string.IsNullOrWhiteSpace(category.NormalizedName))
+                {
+                    category.NormalizedName = NormalizeName(category.Name);
+                }
+
                 if (string.IsNullOrWhiteSpace(category.Description))
                 {
                     category.Description = seed.Description;
@@ -200,7 +206,7 @@ public static class SeedData
                     CategoryId = network.Id,
                     SubcategoryId = network.Subcategories.First(sc => sc.Name == "WiFi Problems").Id,
                     Priority = TicketPriority.High,
-                    Status = TicketStatus.Resolved,
+                    Status = TicketStatus.Solved,
                     CreatedByUserId = client2.Id,
                     AssignedToUserId = tech1.Id,
                     TechnicianId = techProfile1?.Id,
@@ -245,28 +251,6 @@ public static class SeedData
 
             context.TicketMessages.AddRange(messages);
 
-            var notifications = new List<Notification>
-            {
-                new()
-                {
-                    Id = Guid.NewGuid(),
-                    UserId = tech1.Id,
-                    Message = "New ticket assigned: VPN not connecting",
-                    IsRead = false,
-                    CreatedAt = DateTime.UtcNow.AddDays(-2)
-                },
-                new()
-                {
-                    Id = Guid.NewGuid(),
-                    UserId = client1.Id,
-                    Message = "Technician replied to your ticket",
-                    IsRead = false,
-                    CreatedAt = DateTime.UtcNow.AddDays(-1)
-                }
-            };
-
-            context.Notifications.AddRange(notifications);
-            await context.SaveChangesAsync();
         }
 
         // Ensure default system settings exist (idempotent)
@@ -304,5 +288,10 @@ public static class SeedData
             context.SystemSettings.Add(defaultSettings);
             await context.SaveChangesAsync();
         }
+    }
+
+    private static string NormalizeName(string name)
+    {
+        return name.Trim().ToUpperInvariant();
     }
 }

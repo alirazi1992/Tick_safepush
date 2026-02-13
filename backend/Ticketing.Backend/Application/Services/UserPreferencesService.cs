@@ -1,7 +1,6 @@
-using Microsoft.EntityFrameworkCore;
 using Ticketing.Backend.Application.DTOs;
+using Ticketing.Backend.Application.Repositories;
 using Ticketing.Backend.Domain.Entities;
-using Ticketing.Backend.Infrastructure.Data;
 
 namespace Ticketing.Backend.Application.Services;
 
@@ -15,17 +14,20 @@ public interface IUserPreferencesService
 
 public class UserPreferencesService : IUserPreferencesService
 {
-    private readonly AppDbContext _context;
+    private readonly IUserPreferencesRepository _repository;
+    private readonly IUnitOfWork _unitOfWork;
 
-    public UserPreferencesService(AppDbContext context)
+    public UserPreferencesService(
+        IUserPreferencesRepository repository,
+        IUnitOfWork unitOfWork)
     {
-        _context = context;
+        _repository = repository;
+        _unitOfWork = unitOfWork;
     }
 
     public async Task<UserPreferencesResponse> GetPreferencesAsync(Guid userId)
     {
-        var preferences = await _context.UserPreferences
-            .FirstOrDefaultAsync(p => p.UserId == userId);
+        var preferences = await _repository.GetByUserIdAsync(userId);
 
         if (preferences == null)
         {
@@ -57,7 +59,8 @@ public class UserPreferencesService : IUserPreferencesService
             preferences.PushEnabled = true;
             preferences.SmsEnabled = false;
             preferences.DesktopEnabled = true;
-            await _context.SaveChangesAsync();
+            await _repository.UpdateAsync(preferences);
+            await _unitOfWork.SaveChangesAsync();
         }
 
         // Derive direction from language
@@ -82,8 +85,7 @@ public class UserPreferencesService : IUserPreferencesService
 
     public async Task<UserPreferencesResponse> UpdatePreferencesAsync(Guid userId, UserPreferencesUpdateRequest request)
     {
-        var preferences = await _context.UserPreferences
-            .FirstOrDefaultAsync(p => p.UserId == userId);
+        var preferences = await _repository.GetByUserIdAsync(userId);
 
         if (preferences == null)
         {
@@ -103,7 +105,7 @@ public class UserPreferencesService : IUserPreferencesService
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
-            _context.UserPreferences.Add(preferences);
+            await _repository.AddAsync(preferences);
         }
         else
         {
@@ -113,9 +115,10 @@ public class UserPreferencesService : IUserPreferencesService
             preferences.Language = request.Language;
             preferences.Timezone = request.Timezone;
             preferences.UpdatedAt = DateTime.UtcNow;
+            await _repository.UpdateAsync(preferences);
         }
 
-        await _context.SaveChangesAsync();
+        await _unitOfWork.SaveChangesAsync();
 
         // Derive direction from language
         var direction = preferences.Language == "fa" ? "rtl" : "ltr";
@@ -139,8 +142,7 @@ public class UserPreferencesService : IUserPreferencesService
 
     public async Task<NotificationPreferencesResponse> GetNotificationPreferencesAsync(Guid userId)
     {
-        var preferences = await _context.UserPreferences
-            .FirstOrDefaultAsync(p => p.UserId == userId);
+        var preferences = await _repository.GetByUserIdAsync(userId);
 
         if (preferences == null)
         {
@@ -165,8 +167,7 @@ public class UserPreferencesService : IUserPreferencesService
 
     public async Task<NotificationPreferencesResponse> UpdateNotificationPreferencesAsync(Guid userId, NotificationPreferencesUpdateRequest request)
     {
-        var preferences = await _context.UserPreferences
-            .FirstOrDefaultAsync(p => p.UserId == userId);
+        var preferences = await _repository.GetByUserIdAsync(userId);
 
         if (preferences == null)
         {
@@ -186,7 +187,7 @@ public class UserPreferencesService : IUserPreferencesService
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
-            _context.UserPreferences.Add(preferences);
+            await _repository.AddAsync(preferences);
         }
         else
         {
@@ -196,9 +197,10 @@ public class UserPreferencesService : IUserPreferencesService
             preferences.SmsEnabled = request.SmsEnabled;
             preferences.DesktopEnabled = request.DesktopEnabled;
             preferences.UpdatedAt = DateTime.UtcNow;
+            await _repository.UpdateAsync(preferences);
         }
 
-        await _context.SaveChangesAsync();
+        await _unitOfWork.SaveChangesAsync();
 
         return new NotificationPreferencesResponse
         {

@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
@@ -23,7 +23,10 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "@/hooks/use-toast";
+import { toFaDateTime } from "@/lib/datetime";
 import { useAuth } from "@/lib/auth-context";
+import { useCategories } from "@/services/useCategories";
+import { categoryService } from "@/services/CategoryService";
 import {
   Plus,
   Edit,
@@ -50,6 +53,7 @@ import type {
   ApiCategoryResponse,
   ApiSubcategoryResponse,
 } from "@/lib/api-types";
+import { SubcategoryFieldDesignerDialog } from "@/components/subcategory-field-designer-dialog";
 
 interface CategoryManagementProps {
   categoriesData?: any;
@@ -61,6 +65,7 @@ export function CategoryManagement({
   onCategoryUpdate: _legacyOnCategoryUpdate,
 }: CategoryManagementProps) {
   const { token } = useAuth();
+  const { save: saveCategories } = useCategories();
   const [categories, setCategories] = useState<ApiCategoryResponse[]>([]);
   const [subcategories, setSubcategories] = useState<ApiSubcategoryResponse[]>([]);
   const [loading, setLoading] = useState(false);
@@ -71,6 +76,7 @@ export function CategoryManagement({
   const [editingSubCategory, setEditingSubCategory] = useState<ApiSubcategoryResponse | null>(null);
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
   const [subCategoryDialogOpen, setSubCategoryDialogOpen] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const [newCategoryData, setNewCategoryData] = useState({
     name: "",
     description: "",
@@ -84,23 +90,7 @@ export function CategoryManagement({
 
   // Field designer state
   const [fieldDesignerOpen, setFieldDesignerOpen] = useState(false);
-  const [designingSubId, setDesigningSubId] = useState<string | null>(null);
-  const [editingFields, setEditingFields] = useState<FormFieldDef[]>([]);
-  const [newField, setNewField] = useState<{
-    id: string;
-    label: string;
-    type: FieldType;
-    required: boolean;
-    placeholder?: string;
-    optionsText?: string;
-  }>({
-    id: "",
-    label: "",
-    type: "text",
-    required: false,
-    placeholder: "",
-    optionsText: "",
-  });
+  const [designingScope, setDesigningScope] = useState<{ type: "category" | "subcategory"; id: number } | null>(null);
 
   // Load categories on mount and when search query changes
   useEffect(() => {
@@ -124,6 +114,7 @@ export function CategoryManagement({
     try {
       const result = await getAdminCategories(token, { search: searchQuery });
       setCategories(result.items);
+      setLastRefreshedAt(new Date());
     } catch (error: any) {
       console.error("Failed to load categories:", error);
       toast({
@@ -133,6 +124,16 @@ export function CategoryManagement({
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const refreshCategoryContext = async () => {
+    try {
+      const data = await categoryService.list();
+      await saveCategories(data);
+      setLastRefreshedAt(new Date());
+    } catch (error) {
+      console.error("Failed to refresh category context", error);
     }
   };
 
@@ -165,19 +166,46 @@ export function CategoryManagement({
     }
 
     try {
-      await createCategory(token, newCategoryData);
+      console.log("[CategoryManagement] Creating category:", newCategoryData);
+      const createdCategory = await createCategory(token, newCategoryData);
+      console.log("[CategoryManagement] Category created successfully:", createdCategory);
+      
+      // Verify we got a valid response with an ID
+      if (!createdCategory || !createdCategory.id) {
+        throw new Error("Server returned invalid response - no category ID");
+      }
+      
       toast({
         title: "موفق",
-        description: "دسته‌بندی جدید ایجاد شد",
+        description: `دسته‌بندی "${createdCategory.name}" با شناسه ${createdCategory.id} ایجاد شد`,
       });
       setCategoryDialogOpen(false);
       setNewCategoryData({ name: "", description: "", isActive: true });
+      
+      // Refresh categories list
+      console.log("[CategoryManagement] Refreshing categories list...");
       await loadCategories();
+      await refreshCategoryContext();
+      console.log("[CategoryManagement] Categories refreshed");
     } catch (error: any) {
-      console.error("Failed to create category:", error);
+      console.error("[CategoryManagement] Failed to create category:", error);
+      const errorMessage = error?.message || "لطفاً دوباره تلاش کنید";
+      const statusCode = error?.status;
+      
+      let description = errorMessage;
+      if (statusCode === 400) {
+        description = `خطای اعتبارسنجی: ${errorMessage}`;
+      } else if (statusCode === 401 || statusCode === 403) {
+        description = "شما مجوز ایجاد دسته‌بندی را ندارید";
+      } else if (statusCode === 409) {
+        description = "این دسته‌بندی قبلاً وجود دارد";
+      } else if (statusCode >= 500) {
+        description = `خطای سرور: ${errorMessage}`;
+      }
+      
       toast({
         title: "خطا در ایجاد دسته‌بندی",
-        description: error?.message || "لطفاً دوباره تلاش کنید",
+        description,
         variant: "destructive",
       });
     }
@@ -202,6 +230,7 @@ export function CategoryManagement({
       toast({ title: "موفق", description: "دسته‌بندی به‌روزرسانی شد" });
       setEditingCategory(null);
       await loadCategories();
+      await refreshCategoryContext();
       if (selectedCategoryId === editingCategory.id) {
         await loadSubcategories(editingCategory.id);
       }
@@ -229,6 +258,7 @@ export function CategoryManagement({
         setSelectedCategoryId(null);
       }
       await loadCategories();
+      await refreshCategoryContext();
     } catch (error: any) {
       console.error("Failed to delete category:", error);
       toast({
@@ -250,20 +280,49 @@ export function CategoryManagement({
     }
 
     try {
-      await createSubcategory(token, selectedCategoryId, newSubCategoryData);
+      console.log("[CategoryManagement] Creating subcategory:", { categoryId: selectedCategoryId, ...newSubCategoryData });
+      const createdSubcategory = await createSubcategory(token, selectedCategoryId, newSubCategoryData);
+      console.log("[CategoryManagement] Subcategory created successfully:", createdSubcategory);
+      
+      // Verify we got a valid response with an ID
+      if (!createdSubcategory || !createdSubcategory.id) {
+        throw new Error("Server returned invalid response - no subcategory ID");
+      }
+      
       toast({
         title: "موفق",
-        description: "زیر دسته جدید ایجاد شد",
+        description: `زیر دسته "${createdSubcategory.name}" با شناسه ${createdSubcategory.id} ایجاد شد`,
       });
       setSubCategoryDialogOpen(false);
       setNewSubCategoryData({ name: "", description: "", isActive: true });
+      
+      // Refresh lists
+      console.log("[CategoryManagement] Refreshing subcategories list...");
       await loadSubcategories(selectedCategoryId);
       await loadCategories();
+      await refreshCategoryContext();
+      console.log("[CategoryManagement] Subcategories refreshed");
     } catch (error: any) {
-      console.error("Failed to create subcategory:", error);
+      console.error("[CategoryManagement] Failed to create subcategory:", error);
+      const errorMessage = error?.message || "لطفاً دوباره تلاش کنید";
+      const statusCode = error?.status;
+      
+      let description = errorMessage;
+      if (statusCode === 400) {
+        description = `خطای اعتبارسنجی: ${errorMessage}`;
+      } else if (statusCode === 401 || statusCode === 403) {
+        description = "شما مجوز ایجاد زیر دسته را ندارید";
+      } else if (statusCode === 404) {
+        description = "دسته‌بندی مورد نظر یافت نشد";
+      } else if (statusCode === 409) {
+        description = "این زیر دسته قبلاً وجود دارد";
+      } else if (statusCode >= 500) {
+        description = `خطای سرور: ${errorMessage}`;
+      }
+      
       toast({
         title: "خطا در ایجاد زیر دسته",
-        description: error?.message || "لطفاً دوباره تلاش کنید",
+        description,
         variant: "destructive",
       });
     }
@@ -290,6 +349,7 @@ export function CategoryManagement({
       if (selectedCategoryId) {
         await loadSubcategories(selectedCategoryId);
         await loadCategories();
+        await refreshCategoryContext();
       }
     } catch (error: any) {
       console.error("Failed to update subcategory:", error);
@@ -314,6 +374,7 @@ export function CategoryManagement({
       if (selectedCategoryId) {
         await loadSubcategories(selectedCategoryId);
         await loadCategories();
+        await refreshCategoryContext();
       }
     } catch (error: any) {
       console.error("Failed to delete subcategory:", error);
@@ -325,60 +386,19 @@ export function CategoryManagement({
     }
   };
 
-  // Dynamic Field Designer handlers (preserved for future use)
-  const openFieldDesigner = (subId: number) => {
-    // Field designer functionality can be added later if needed
-    toast({
-      title: "اطلاع",
-      description: "طراحی فیلدهای سفارشی در نسخه‌های بعدی اضافه خواهد شد",
-    });
-  };
-
-  const saveFieldDesigner = () => {
-    // Field designer functionality can be added later if needed
-    setFieldDesignerOpen(false);
-    setDesigningSubId(null);
-  };
-
-  const addNewField = () => {
-    if (!newField.id || !newField.label) {
+  // Dynamic Field Designer handlers
+  const openFieldDesigner = (type: "category" | "subcategory", id: number) => {
+    if (!token) {
       toast({
         title: "خطا",
-        description: "شناسه و عنوان فیلد الزامی است",
+        description: "لطفاً ابتدا وارد سیستم شوید",
         variant: "destructive",
       });
       return;
     }
-    if (editingFields.some((f) => f.id === newField.id)) {
-      toast({
-        title: "خطا",
-        description: "شناسه فیلد تکراری است",
-        variant: "destructive",
-      });
-      return;
-    }
-    const options =
-      newField.type === "select" || newField.type === "radio"
-        ? parseOptions(newField.optionsText || "")
-        : [];
-    const toAdd: FormFieldDef = {
-      id: newField.id,
-      label: newField.label,
-      type: newField.type,
-      required: newField.required,
-      placeholder: newField.placeholder,
-      options,
-    };
-    setEditingFields((prev) => [...prev, toAdd]);
-    setNewField({
-      id: "",
-      label: "",
-      type: "text",
-      required: false,
-      placeholder: "",
-      optionsText: "",
-    });
-    toast({ title: "موفق", description: "فیلد اضافه شد" });
+
+    setDesigningScope({ type, id });
+    setFieldDesignerOpen(true);
   };
 
   const updateField = (
@@ -614,6 +634,10 @@ export function CategoryManagement({
           <p className="text-muted-foreground font-iran">
             مدیریت دسته‌بندی‌ها و زیر دسته‌های تیکت‌ها
           </p>
+          <p className="text-xs text-muted-foreground font-iran mt-1">
+            آخرین بروزرسانی:{" "}
+            {lastRefreshedAt ? toFaDateTime(lastRefreshedAt) : "—"}
+          </p>
         </div>
         <Dialog open={categoryDialogOpen} onOpenChange={setCategoryDialogOpen}>
           <DialogTrigger asChild>
@@ -622,7 +646,7 @@ export function CategoryManagement({
               دسته‌بندی جدید
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-w-md font-iran" dir="rtl">
+          <DialogContent className="max-h-[85vh] overflow-y-auto w-[95vw] sm:w-[90vw] md:max-w-md font-iran" dir="rtl">
             <DialogHeader>
               <DialogTitle className="text-right font-iran">
                 ایجاد دسته‌بندی جدید
@@ -765,17 +789,28 @@ export function CategoryManagement({
                         </div>
                       </div>
                       <div className="flex gap-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditingCategory(category);
-                          }}
-                          className="font-iran"
-                        >
-                          <Edit className="w-3 h-3" />
-                        </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingCategory(category);
+                            }}
+                            className="font-iran"
+                          >
+                            <Edit className="w-3 h-3" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openFieldDesigner("category", category.id);
+                            }}
+                            className="font-iran"
+                          >
+                            <Settings className="w-3 h-3" />
+                          </Button>
                         <Button
                           variant="ghost"
                           size="sm"
@@ -820,7 +855,7 @@ export function CategoryManagement({
                       زیر دسته جدید
                     </Button>
                   </DialogTrigger>
-                  <DialogContent className="max-w-md font-iran" dir="rtl">
+                  <DialogContent className="max-h-[85vh] overflow-y-auto w-[95vw] sm:w-[90vw] md:max-w-md font-iran" dir="rtl">
                     <DialogHeader>
                       <DialogTitle className="text-right font-iran">
                         ایجاد زیر دسته جدید
@@ -953,7 +988,7 @@ export function CategoryManagement({
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => openFieldDesigner(subCategory.id)}
+                            onClick={() => openFieldDesigner("subcategory", subCategory.id)}
                             className="font-iran"
                           >
                             <Settings className="w-3 h-3" />
@@ -993,7 +1028,7 @@ export function CategoryManagement({
           open={!!editingCategory}
           onOpenChange={() => setEditingCategory(null)}
         >
-          <DialogContent className="max-w-md font-iran" dir="rtl">
+          <DialogContent className="max-h-[85vh] overflow-y-auto w-[95vw] sm:w-[90vw] md:max-w-md font-iran" dir="rtl">
             <DialogHeader>
               <DialogTitle className="text-right font-iran">
                 ویرایش دسته‌بندی
@@ -1074,7 +1109,7 @@ export function CategoryManagement({
           open={!!editingSubCategory}
           onOpenChange={() => setEditingSubCategory(null)}
         >
-          <DialogContent className="max-w-md font-iran" dir="rtl">
+          <DialogContent className="max-h-[85vh] overflow-y-auto w-[95vw] sm:w-[90vw] md:max-w-md font-iran" dir="rtl">
             <DialogHeader>
               <DialogTitle className="text-right font-iran">
                 ویرایش زیر دسته
@@ -1151,291 +1186,21 @@ export function CategoryManagement({
       )}
 
       {/* Field Designer Dialog */}
-      <Dialog open={fieldDesignerOpen} onOpenChange={setFieldDesignerOpen}>
-        <DialogContent
-          className="max-w-3xl font-iran"
-          dir="rtl"
-          aria-describedby={undefined}
-        >
-          <DialogHeader>
-            <DialogTitle className="text-right font-iran">
-              طراحی فیلدهای سفارشی
-            </DialogTitle>
-          </DialogHeader>
-          {editingFields.length === 0 && (
-            <div className="mb-2 border rounded-md p-3">
-              <p className="text-sm text-muted-foreground mb-2 text-right">
-                این زیرمسئله از فرم پیش‌فرض استفاده می‌کند. فیلدهای پیش‌فرض
-                (نمایشی):
-              </p>
-              {defaultPreview.length > 0 ? (
-                <>
-                <div className="grid grid-cols-12 gap-2">
-                  {defaultPreview.map((f) => (
-                    <div
-                      key={f.id}
-                      className="col-span-12 md:col-span-6 border rounded px-2 py-1 text-right"
-                    >
-                      <div className="text-sm">{f.label}</div>
-                      <div className="text-[11px] text-muted-foreground">
-                        نوع: {f.type}
-                        {f.required ? " • اجباری" : ""}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <div className="flex justify-end mt-3">
-                  <Button size="sm" onClick={() => setEditingFields(defaultPreview)} className="font-iran">
-                    استفاده از همین فیلدها به‌عنوان سفارشی
-                  </Button>
-                </div>
-                </>
-              ) : (
-                <p className="text-xs text-muted-foreground text-right">
-                  برای این مورد، فیلد پیش‌فرضی نمایش داده نشد.
-                </p>
-              )}
-            </div>
-          )}
-          <div className="space-y-6">
-            <div className="space-y-3">
-              {editingFields.length === 0 && (
-                <p className="text-sm text-muted-foreground text-right">
-                  هیچ فیلدی تعریف نشده است.
-                </p>
-              )}
-              {editingFields.map((f, idx) => {
-                const optionsText = (f.options || [])
-                  .map((o) => `${o.value}:${o.label}`)
-                  .join(", ");
-                return (
-                  <div
-                    key={f.id}
-                    className="grid grid-cols-12 gap-2 items-end border rounded-md p-3"
-                  >
-                    <div className="col-span-12 md:col-span-3 space-y-1">
-                      <Label className="text-right">شناسه</Label>
-                      <Input
-                        value={f.id}
-                        disabled
-                        className="text-right bg-muted"
-                        dir="rtl"
-                      />
-                    </div>
-                    <div className="col-span-12 md:col-span-3 space-y-1">
-                      <Label className="text-right">عنوان</Label>
-                      <Input
-                        value={f.label}
-                        onChange={(e) =>
-                          updateField(idx, { label: e.target.value })
-                        }
-                        className="text-right"
-                        dir="rtl"
-                      />
-                    </div>
-                    <div className="col-span-12 md:col-span-2 space-y-1">
-                      <Label className="text-right">نوع</Label>
-                      <Select
-                        value={f.type}
-                        onValueChange={(v) =>
-                          updateField(idx, { type: v as any })
-                        }
-                        dir="rtl"
-                      >
-                        <SelectTrigger className="text-right">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="text">متن</SelectItem>
-                          <SelectItem value="textarea">چندخطی</SelectItem>
-                          <SelectItem value="number">عدد</SelectItem>
-                          <SelectItem value="email">ایمیل</SelectItem>
-                          <SelectItem value="tel">تلفن</SelectItem>
-                          <SelectItem value="date">تاریخ</SelectItem>
-                          <SelectItem value="datetime">تاریخ و زمان</SelectItem>
-                          <SelectItem value="select">لیست انتخابی</SelectItem>
-                          <SelectItem value="radio">گزینه‌ای</SelectItem>
-                          <SelectItem value="checkbox">تیک‌زدنی</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="col-span-12 md:col-span-2 space-y-1">
-                      <Label className="text-right">اجباری؟</Label>
-                      <div className="flex gap-2 items-center h-10">
-                        <input
-                          type="checkbox"
-                          checked={!!f.required}
-                          onChange={(e) =>
-                            updateField(idx, { required: e.target.checked })
-                          }
-                        />
-                        <span className="text-sm">الزامی</span>
-                      </div>
-                    </div>
-                    <div className="col-span-12 md:col-span-6 space-y-1">
-                      <Label className="text-right">راهنما</Label>
-                      <Input
-                        value={f.placeholder || ""}
-                        onChange={(e) =>
-                          updateField(idx, { placeholder: e.target.value })
-                        }
-                        className="text-right"
-                        dir="rtl"
-                      />
-                    </div>
-                    {(f.type === "select" || f.type === "radio") && (
-                      <div className="col-span-12 md:col-span-6 space-y-1">
-                        <Label className="text-right">
-                          گزینه‌ها (value:label, جداشده با کاما)
-                        </Label>
-                        <Input
-                          value={optionsText}
-                          onChange={(e) =>
-                            updateField(idx, { optionsText: e.target.value })
-                          }
-                          className="text-right"
-                          dir="rtl"
-                        />
-                      </div>
-                    )}
-                    <div className="col-span-12 md:col-span-12 flex justify-end">
-                      <Button
-                        variant="ghost"
-                        className="text-red-600"
-                        onClick={() => removeField(idx)}
-                      >
-                        حذف
-                      </Button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="border rounded-lg p-3 space-y-3">
-              <h4 className="font-medium text-right">افزودن فیلد جدید</h4>
-              <div className="grid grid-cols-12 gap-2 items-end">
-                <div className="col-span-12 md:col-span-3 space-y-1">
-                  <Label className="text-right">شناسه</Label>
-                  <Input
-                    value={newField.id}
-                    onChange={(e) =>
-                      setNewField((p) => ({ ...p, id: e.target.value }))
-                    }
-                    className="text-right"
-                    dir="rtl"
-                    placeholder="مثال: deviceBrand"
-                  />
-                </div>
-                <div className="col-span-12 md:col-span-3 space-y-1">
-                  <Label className="text-right">عنوان</Label>
-                  <Input
-                    value={newField.label}
-                    onChange={(e) =>
-                      setNewField((p) => ({ ...p, label: e.target.value }))
-                    }
-                    className="text-right"
-                    dir="rtl"
-                    placeholder="برچسب فیلد"
-                  />
-                </div>
-                <div className="col-span-12 md:col-span-2 space-y-1">
-                  <Label className="text-right">نوع</Label>
-                  <Select
-                    value={newField.type}
-                    onValueChange={(v) =>
-                      setNewField((p) => ({ ...p, type: v as any }))
-                    }
-                    dir="rtl"
-                  >
-                    <SelectTrigger className="text-right">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="text">متن</SelectItem>
-                      <SelectItem value="textarea">چندخطی</SelectItem>
-                      <SelectItem value="number">عدد</SelectItem>
-                      <SelectItem value="email">ایمیل</SelectItem>
-                      <SelectItem value="tel">تلفن</SelectItem>
-                      <SelectItem value="date">تاریخ</SelectItem>
-                      <SelectItem value="datetime">تاریخ و زمان</SelectItem>
-                      <SelectItem value="select">لیست انتخابی</SelectItem>
-                      <SelectItem value="radio">گزینه‌ای</SelectItem>
-                      <SelectItem value="checkbox">تیک‌زدنی</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="col-span-12 md:col-span-2">
-                  <Label className="text-right block">اجباری؟</Label>
-                  <div className="flex gap-2 items-center h-10">
-                    <input
-                      type="checkbox"
-                      checked={newField.required}
-                      onChange={(e) =>
-                        setNewField((p) => ({
-                          ...p,
-                          required: e.target.checked,
-                        }))
-                      }
-                    />
-                    <span className="text-sm">الزامی</span>
-                  </div>
-                </div>
-                <div className="col-span-12 md:col-span-6 space-y-1">
-                  <Label className="text-right">راهنما</Label>
-                  <Input
-                    value={newField.placeholder}
-                    onChange={(e) =>
-                      setNewField((p) => ({
-                        ...p,
-                        placeholder: e.target.value,
-                      }))
-                    }
-                    className="text-right"
-                    dir="rtl"
-                    placeholder="مثال: مدل دستگاه را وارد کنید"
-                  />
-                </div>
-                {(newField.type === "select" || newField.type === "radio") && (
-                  <div className="col-span-12 md:col-span-6 space-y-1">
-                    <Label className="text-right">
-                      گزینه‌ها (value:label, جداشده با کاما)
-                    </Label>
-                    <Input
-                      value={newField.optionsText}
-                      onChange={(e) =>
-                        setNewField((p) => ({
-                          ...p,
-                          optionsText: e.target.value,
-                        }))
-                      }
-                      className="text-right"
-                      dir="rtl"
-                      placeholder="hp:HP, dell:Dell"
-                    />
-                  </div>
-                )}
-                <div className="col-span-12 flex justify-end">
-                  <Button onClick={addNewField}>افزودن فیلد</Button>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2">
-              <Button
-                variant="outline"
-                onClick={() => setFieldDesignerOpen(false)}
-                className="font-iran"
-              >
-                انصراف
-              </Button>
-              <Button onClick={saveFieldDesigner} className="font-iran">
-                ذخیره تغییرات
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {designingScope !== null && (
+        <SubcategoryFieldDesignerDialog
+          open={fieldDesignerOpen}
+          onOpenChange={(open) => {
+            setFieldDesignerOpen(open);
+            if (!open) {
+              setDesigningScope(null);
+              void refreshCategoryContext();
+            }
+          }}
+          scopeType={designingScope.type}
+          scopeId={designingScope.id}
+          token={token}
+        />
+      )}
 
       {/* Warning Message */}
       <Card className="border-orange-200 bg-orange-50">

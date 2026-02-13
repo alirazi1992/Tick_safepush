@@ -25,4 +25,7 @@ public class Ticket
     public Technician? Technician { get; set; }
     public ICollection<TicketMessage> Messages { get; set; } = new List<TicketMessage>();
     public ICollection<Attachment> Attachments { get; set; } = new List<Attachment>();
+    public ICollection<TicketFieldValue> FieldValues { get; set; } = new List<TicketFieldValue>();
+    public ICollection<TicketTechnicianAssignment> AssignedTechnicians { get; set; } = new List<TicketTechnicianAssignment>();
+    public ICollection<TicketActivityEvent> ActivityEvents { get; set; } = new List<TicketActivityEvent>();
 }

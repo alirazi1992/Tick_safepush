@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { toast } from "@/hooks/use-toast"
 import { Upload, X, File, ImageIcon, FileText } from "lucide-react"
+import { toFaTime } from "@/lib/datetime"
 
 
 export const validateFile = (file: File): string | null => {
@@ -64,6 +65,7 @@ export interface UploadedFile {
   type: string
   url: string
   uploadedAt: string
+  file?: File // Store the actual File object for upload
 }
 
 interface FileUploadProps {
@@ -117,6 +119,8 @@ export function FileUpload({ onFilesChange, maxFiles = 5, className }: FileUploa
 
         try {
           const uploadedFile = await uploadFile(file)
+          // Store the actual File object for later upload
+          uploadedFile.file = file
           setFiles((prev) => {
             const newFiles = [...prev, uploadedFile]
             onFilesChange(newFiles)
@@ -233,7 +237,7 @@ export function FileUpload({ onFilesChange, maxFiles = 5, className }: FileUploa
                   <div>
                     <p className="text-sm font-medium text-right">{file.name}</p>
                     <p className="text-xs text-muted-foreground text-right">
-                      {formatFileSize(file.size)} • {new Date(file.uploadedAt).toLocaleTimeString("fa-IR")}
+                      {formatFileSize(file.size)} • {toFaTime(file.uploadedAt)}
                     </p>
                   </div>
                 </div>

@@ -1,10 +1,9 @@
 using Microsoft.AspNetCore.Identity;
-using Microsoft.EntityFrameworkCore;
 using Ticketing.Backend.Application.DTOs;
+using Ticketing.Backend.Application.Repositories;
 using Ticketing.Backend.Domain.Entities;
 using Ticketing.Backend.Domain.Enums;
 using Ticketing.Backend.Infrastructure.Auth;
-using Ticketing.Backend.Infrastructure.Data;
 
 namespace Ticketing.Backend.Application.Services;
 
@@ -26,16 +25,22 @@ public interface IUserService
 
 public class UserService : IUserService
 {
-    private readonly AppDbContext _context;
+    private readonly IUserRepository _userRepository;
+    private readonly ITechnicianRepository _technicianRepository;
+    private readonly IUnitOfWork _unitOfWork;
     private readonly IJwtTokenGenerator _jwtTokenGenerator;
     private readonly IPasswordHasher<User> _passwordHasher;
 
     public UserService(
-        AppDbContext context,
+        IUserRepository userRepository,
+        ITechnicianRepository technicianRepository,
+        IUnitOfWork unitOfWork,
         IJwtTokenGenerator jwtTokenGenerator,
         IPasswordHasher<User> passwordHasher)
     {
-        _context = context;
+        _userRepository = userRepository;
+        _technicianRepository = technicianRepository;
+        _unitOfWork = unitOfWork;
         _jwtTokenGenerator = jwtTokenGenerator;
         _passwordHasher = passwordHasher;
     }
@@ -88,7 +93,7 @@ public class UserService : IUserService
         }
 
         // 1) SECURITY: Check email uniqueness (required for user identification)
-        var exists = await _context.Users.AnyAsync(u => u.Email == normalizedEmail);
+        var exists = await _userRepository.ExistsByEmailAsync(normalizedEmail);
         if (exists)
         {
             // Email conflict - return null to trigger HTTP 409 in controller
@@ -96,7 +101,7 @@ public class UserService : IUserService
         }
 
         // 2) SECURITY-CRITICAL: Enforce Admin role creation authorization rules
-        var hasAnyUsers = await _context.Users.AnyAsync();
+        var hasAnyUsers = await _userRepository.AnyAsync();
         var isBootstrap = !hasAnyUsers;
         var isAdminRequest = role == UserRole.Admin;
         var isCreatorAdmin = creatorRole == UserRole.Admin;
@@ -130,15 +135,16 @@ public class UserService : IUserService
         user.PasswordHash = _passwordHasher.HashPassword(user, request.Password);
 
         // 5) Persist user to database (Role will be stored exactly as request.Role)
-        _context.Users.Add(user);
-        await _context.SaveChangesAsync();
+        await _userRepository.AddAsync(user);
+        await _unitOfWork.SaveChangesAsync();
 
         // 6) SECURITY: Generate JWT token with role claim from persisted user.Role
         // Token generation uses user.Role (which equals request.Role) - no hardcoding
+        var userDto = await MapToDtoAsync(user);
         return new AuthResponse
         {
-            Token = _jwtTokenGenerator.GenerateToken(user),
-            User = MapToDto(user)
+            Token = _jwtTokenGenerator.GenerateToken(user, userDto.IsSupervisor),
+            User = userDto
         };
     }
 
@@ -146,12 +152,17 @@ public class UserService : IUserService
     {
         var normalizedEmail = request.Email.ToLowerInvariant();
 
-        var user = await _context.Users
-            .FirstOrDefaultAsync(u => u.Email == normalizedEmail);
+        var user = await _userRepository.GetByEmailAsync(normalizedEmail);
 
         if (user == null)
         {
             return null;
+        }
+
+        // Check if user is locked out (e.g., soft-deleted technician)
+        if (user.LockoutEnabled && user.LockoutEnd.HasValue && user.LockoutEnd > DateTimeOffset.UtcNow)
+        {
+            return null; // Account is locked out
         }
 
         var verifyResult = _passwordHasher.VerifyHashedPassword(user, user.PasswordHash, request.Password);
@@ -160,39 +171,45 @@ public class UserService : IUserService
             return null;
         }
 
+        var userDto = await MapToDtoAsync(user);
         return new AuthResponse
         {
-            Token = _jwtTokenGenerator.GenerateToken(user),
-            User = MapToDto(user)
+            Token = _jwtTokenGenerator.GenerateToken(user, userDto.IsSupervisor),
+            User = userDto
         };
     }
 
     public async Task<UserDto?> GetByIdAsync(Guid id)
     {
-        var user = await _context.Users.FindAsync(id);
-        return user == null ? null : MapToDto(user);
+        var user = await _userRepository.GetByIdAsync(id);
+        return user == null ? null : await MapToDtoAsync(user);
     }
 
     public async Task<IEnumerable<UserDto>> GetAllAsync()
     {
-        return await _context.Users
-            .OrderBy(u => u.FullName)
-            .Select(u => MapToDto(u))
-            .ToListAsync();
+        var users = await _userRepository.GetAllAsync();
+        var results = new List<UserDto>();
+        foreach (var user in users)
+        {
+            results.Add(await MapToDtoAsync(user));
+        }
+        return results;
     }
 
     public async Task<IEnumerable<UserDto>> GetTechniciansAsync()
     {
-        return await _context.Users
-            .Where(u => u.Role == UserRole.Technician)
-            .OrderBy(u => u.FullName)
-            .Select(u => MapToDto(u))
-            .ToListAsync();
+        var technicians = await _userRepository.GetByRoleAsync("Technician");
+        var results = new List<UserDto>();
+        foreach (var user in technicians)
+        {
+            results.Add(await MapToDtoAsync(user));
+        }
+        return results;
     }
 
     public async Task<UserDto?> UpdateProfileAsync(Guid userId, UpdateProfileRequest request)
     {
-        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId);
+        var user = await _userRepository.GetByIdAsync(userId);
         if (user == null)
         {
             return null;
@@ -201,7 +218,7 @@ public class UserService : IUserService
         if (!string.IsNullOrWhiteSpace(request.Email))
         {
             var normalizedEmail = request.Email.ToLowerInvariant();
-            var emailInUse = await _context.Users.AnyAsync(u => u.Email == normalizedEmail && u.Id != userId);
+            var emailInUse = await _userRepository.ExistsByEmailExcludingIdAsync(normalizedEmail, userId);
             if (emailInUse)
             {
                 return null;
@@ -230,8 +247,9 @@ public class UserService : IUserService
             user.AvatarUrl = request.AvatarUrl;
         }
 
-        await _context.SaveChangesAsync();
-        return MapToDto(user);
+        await _userRepository.UpdateAsync(user);
+        await _unitOfWork.SaveChangesAsync();
+        return await MapToDtoAsync(user);
     }
 
     public async Task<(bool Success, string? ErrorMessage)> ChangePasswordAsync(
@@ -257,7 +275,7 @@ public class UserService : IUserService
             return (false, "رمز عبور جدید باید شامل حداقل یک حرف و یک عدد باشد");
         }
 
-        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId);
+        var user = await _userRepository.GetByIdAsync(userId);
         if (user == null)
         {
             return (false, "کاربر یافت نشد");
@@ -279,18 +297,30 @@ public class UserService : IUserService
 
         // Update password
         user.PasswordHash = _passwordHasher.HashPassword(user, newPassword);
-        await _context.SaveChangesAsync();
+        await _userRepository.UpdateAsync(user);
+        await _unitOfWork.SaveChangesAsync();
         return (true, null);
     }
 
-    private static UserDto MapToDto(User user) => new()
+    private async Task<UserDto> MapToDtoAsync(User user)
     {
-        Id = user.Id,
-        FullName = user.FullName,
-        Email = user.Email,
-        Role = user.Role,
-        PhoneNumber = user.PhoneNumber,
-        Department = user.Department,
-        AvatarUrl = user.AvatarUrl
-    };
+        var isSupervisor = false;
+        if (user.Role == UserRole.Technician)
+        {
+            var technician = await _technicianRepository.GetByUserIdAsync(user.Id);
+            isSupervisor = technician != null && technician.IsSupervisor;
+        }
+
+        return new UserDto
+        {
+            Id = user.Id,
+            FullName = user.FullName,
+            Email = user.Email,
+            Role = user.Role,
+            PhoneNumber = user.PhoneNumber,
+            Department = user.Department,
+            AvatarUrl = user.AvatarUrl,
+            IsSupervisor = isSupervisor
+        };
+    }
 }

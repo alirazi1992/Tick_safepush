@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -14,6 +14,7 @@ import {
 import { apiRequest } from "@/lib/api-client";
 import type {
   ApiCategoryResponse,
+  ApiTicketListItemResponse,
   ApiTicketMessageDto,
   ApiTicketResponse,
   ApiUserDto,
@@ -35,12 +36,18 @@ import {
   DashboardShell,
   type DashboardNavItem,
 } from "@/components/dashboard-shell";
+import { BackendStatusBanner } from "@/components/backend-status-banner";
 import { useAuth } from "@/lib/auth-context";
 import { useCategories } from "@/services/useCategories";
 import { categoryService } from "@/services/CategoryService";
 import type { CategoriesData } from "@/services/categories-types";
 import type { Ticket, TicketStatus } from "@/types";
 import { toast } from "@/hooks/use-toast";
+import { getMyTechnicianProfile } from "@/lib/technicians-api";
+import { SupervisorTechnicianManagement } from "@/components/supervisor-technician-management";
+import { useTicketListUpdates, useRealtime } from "@/lib/realtime-context";
+import { toast as showToast } from "@/hooks/use-toast";
+import { parseServerDate, toFaDateTime } from "@/lib/datetime";
 
 export default function Home() {
   const { user, token, isLoading } = useAuth();
@@ -51,6 +58,20 @@ export default function Home() {
   const { categories: categoriesData, save: saveCategories } = useCategories();
   const categoriesRef = useRef<CategoriesData>(categoriesData);
   const [activeView, setActiveView] = useState<string>("");
+  const [isSupervisor, setIsSupervisor] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [isLoadingData, setIsLoadingData] = useState(true);
+
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "development") return;
+    const raw = "2026-02-02T08:05:00";
+    const parsed = parseServerDate(raw);
+    console.log("[datetime test]", {
+      raw,
+      parsed: parsed?.toISOString() ?? null,
+      tehran: toFaDateTime(raw),
+    });
+  }, []);
 
   const getDefaultViewForRole = (role: "client" | "engineer" | "admin") => {
     switch (role) {
@@ -62,6 +83,9 @@ export default function Home() {
         return "client.tickets";
     }
   };
+
+  const resolvedActiveView =
+    user?.role ? activeView || getDefaultViewForRole(user.role) : "";
 
   const categoriesReady = useMemo(
     () =>
@@ -80,41 +104,52 @@ export default function Home() {
     categorySnapshot: CategoriesData,
     userRole?: string
   ): Promise<Ticket[]> => {
+    setIsLoadingData(true);
+    setLoadError(null);
+    
     try {
       // Use technician-specific endpoint for engineers
       const endpoint = userRole === "engineer" ? "/api/technician/tickets" : "/api/tickets";
-      const apiTickets = await apiRequest<ApiTicketResponse[]>(endpoint, {
+      console.log(`[loadTickets] Fetching from ${endpoint} for role ${userRole}`);
+      
+      const apiTickets = await apiRequest<ApiTicketListItemResponse[]>(endpoint, {
         token: authToken,
       });
 
-      const mapped = await Promise.all(
-        apiTickets.map(async (apiTicket) => {
-          const messages = await apiRequest<ApiTicketMessageDto[]>(
-            `/api/tickets/${apiTicket.id}/messages`,
-            {
-              token: authToken,
-            }
-          );
+      console.log(`[loadTickets] Received ${apiTickets?.length ?? 0} tickets`);
 
-          return mapApiTicketToUi(
-            apiTicket,
-            categorySnapshot,
-            messages.map(mapApiMessageToResponse)
-          );
-        })
+      const mapped = apiTickets.map((apiTicket) =>
+        mapApiTicketToUi(apiTicket, categorySnapshot, [])
       );
 
       setTickets(mapped);
+      setLoadError(null);
       return mapped;
-    } catch (error) {
-      console.error("Failed to load tickets", error);
+    } catch (error: any) {
+      console.error("[loadTickets] Failed to load tickets:", error);
+      
+      // Determine error type for better user feedback
+      let errorMsg = "خطا در بارگذاری تیکت‌ها";
+      if (error?.isNetworkError || error?.message?.includes("Failed to fetch")) {
+        errorMsg = "سرور در دسترس نیست - لطفاً اتصال شبکه و وضعیت سرور را بررسی کنید";
+      } else if (error?.status === 401) {
+        errorMsg = "نشست شما منقضی شده - لطفاً مجدداً وارد شوید";
+      } else if (error?.status === 500) {
+        errorMsg = "خطای داخلی سرور - لطفاً با پشتیبانی تماس بگیرید";
+      } else if (error?.message) {
+        errorMsg = error.message;
+      }
+      
+      setLoadError(errorMsg);
       toast({
         title: "بارگذاری تیکت‌ها ناموفق بود",
-        description: "اتصال یا سرور بررسی شود.",
+        description: errorMsg,
         variant: "destructive",
       });
       setTickets([]);
       return [];
+    } finally {
+      setIsLoadingData(false);
     }
   };
 
@@ -122,15 +157,16 @@ export default function Home() {
     try {
       const { getAllTechnicians } = await import("@/lib/technicians-api");
       const apiTechnicians = await getAllTechnicians(authToken);
+      const technicianItems = apiTechnicians.items ?? [];
       
       // Calculate active tickets for each technician
-      const techniciansWithLoad = apiTechnicians
+      const techniciansWithLoad = technicianItems
         .filter((tech) => tech.isActive) // Only show active technicians
         .map((tech) => {
           // Count active tickets assigned to this technician
           const activeTicketsCount = currentTickets.filter(
             (ticket) => ticket.assignedTo === tech.id && 
-                       (ticket.status === "Open" || ticket.status === "InProgress")
+                      ((ticket.displayStatus ?? ticket.status) === "Open" || (ticket.displayStatus ?? ticket.status) === "InProgress")
           ).length;
           
           return {
@@ -169,22 +205,101 @@ export default function Home() {
     if (!token || !user) {
       setTickets([]);
       setTechnicians([]);
+      setIsSupervisor(false);
       return;
     }
 
-    // Load tickets first, then technicians (technicians need tickets to calculate load)
     const loadData = async () => {
       const loadedTickets = await loadTickets(token, categoriesReady ? categoriesRef.current : {}, user?.role);
-      
+
       if (user.role === "admin") {
-        await loadTechnicians(token, loadedTickets);
+        const needsTechnicians =
+          resolvedActiveView === "admin.assignment" ||
+          resolvedActiveView === "admin.technicians" ||
+          resolvedActiveView === "admin.auto-settings";
+        if (needsTechnicians) {
+          await loadTechnicians(token, loadedTickets);
+        }
+        setIsSupervisor(false);
       } else {
         setTechnicians([]);
       }
     };
-    
+
     void loadData();
-  }, [token, user, categoriesReady]);
+  }, [token, user?.id, user?.role, categoriesReady, resolvedActiveView]);
+
+  useEffect(() => {
+    if (!token || !user || user.role !== "engineer") {
+      setIsSupervisor(false);
+      return;
+    }
+
+    // Prefer /api/auth/me isSupervisor flag; fallback to profile if missing
+    if (typeof user.isSupervisor === "boolean") {
+      setIsSupervisor(user.isSupervisor);
+      return;
+    }
+
+    const loadSupervisorFlag = async () => {
+      try {
+        const profile = await getMyTechnicianProfile(token);
+        setIsSupervisor(Boolean(profile.isSupervisor));
+      } catch (error) {
+        console.warn("Failed to load supervisor profile", error);
+        setIsSupervisor(false);
+      }
+    };
+
+    void loadSupervisorFlag();
+  }, [token, user?.role, user?.isSupervisor]);
+
+  // -------- PHASE 4: Real-time updates via SignalR --------
+  const { addTicketUpdateListener } = useRealtime();
+
+  // Handle real-time ticket updates - refresh immediately when events are received
+  useEffect(() => {
+    if (!token || !user) return;
+
+    const unsubscribe = addTicketUpdateListener({
+      onAnyUpdate: (ticketId, updateType) => {
+        console.log(`[Realtime] Ticket ${ticketId} updated: ${updateType}`);
+        // Immediately refresh tickets on any update
+        loadTickets(token, categoriesRef.current, user?.role).catch(console.warn);
+        
+        // Also refresh technicians for admin when needed
+        if (user.role === "admin") {
+          const needsTechnicians =
+            resolvedActiveView === "admin.assignment" ||
+            resolvedActiveView === "admin.technicians" ||
+            resolvedActiveView === "admin.auto-settings";
+          if (needsTechnicians) {
+            loadTechnicians(token).catch(console.warn);
+          }
+        }
+      },
+      onReplyAdded: (payload) => {
+        // Show toast notification for new replies (from other users)
+        if (payload.metadata?.authorName) {
+          showToast({
+            title: "پاسخ جدید",
+            description: `${payload.metadata.authorName} پاسخی اضافه کرد`,
+          });
+        }
+      },
+      onStatusChanged: (payload) => {
+        // Show toast notification for status changes
+        showToast({
+          title: "تغییر وضعیت تیکت",
+          description: `وضعیت از ${payload.oldStatus} به ${payload.newStatus} تغییر کرد`,
+        });
+      },
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [token, user?.id, user?.role, addTicketUpdateListener, resolvedActiveView]);
 
   // -------- Ticket handlers (single definitions) --------
 
@@ -231,20 +346,67 @@ export default function Home() {
       return;
     }
 
-    try {
-      const created = await apiRequest<ApiTicketResponse>("/api/tickets", {
-        method: "POST",
-        token,
-        body: {
-          title: draft.title,
-          description: draft.description,
-          categoryId: category.backendId,
-          subcategoryId: draft.subcategory
-            ? category.subIssues[draft.subcategory]?.backendId
-            : undefined,
-          priority: mapUiPriorityToApi(draft.priority),
-        },
+    const subcategoryId = draft.subcategory
+      ? category.subIssues[draft.subcategory]?.backendId
+      : undefined;
+
+    if (!subcategoryId) {
+      toast({
+        title: "زیرشاخه الزامی است",
+        description: "لطفاً یک زیرشاخه معتبر انتخاب کنید.",
+        variant: "destructive",
       });
+      return;
+    }
+
+    try {
+      const payload = {
+        title: draft.title,
+        description: draft.description || "",
+        categoryId: category.backendId,
+        subcategoryId,
+        priority: mapUiPriorityToApi(draft.priority),
+        dynamicFields: draft.dynamicFields || undefined,
+      };
+
+      const hasAttachments = Array.isArray(draft.attachments) && draft.attachments.some((f: any) => f?.file instanceof File);
+      if (process.env.NODE_ENV === "development") {
+        const maskedToken = token ? `${token.slice(0, 6)}...${token.slice(-4)}` : undefined;
+        const attachmentNames = hasAttachments
+          ? draft.attachments
+              .filter((f: any) => f?.file instanceof File)
+              .map((f: any) => f.file.name)
+          : [];
+        console.log("[TicketCreate] Final payload", {
+          payload,
+          hasAttachments,
+          attachments: attachmentNames,
+          headers: {
+            Authorization: token ? `Bearer ${maskedToken}` : undefined,
+            "Content-Type": hasAttachments ? "multipart/form-data" : "application/json",
+          },
+        });
+      }
+      const created = hasAttachments
+        ? await apiRequest<ApiTicketResponse>("/api/tickets", {
+            method: "POST",
+            token,
+            body: (() => {
+              const formData = new FormData();
+              formData.append("ticketData", JSON.stringify(payload));
+              draft.attachments.forEach((file: any) => {
+                if (file?.file instanceof File) {
+                  formData.append("attachments", file.file);
+                }
+              });
+              return formData;
+            })(),
+          })
+        : await apiRequest<ApiTicketResponse>("/api/tickets", {
+            method: "POST",
+            token,
+            body: payload,
+          });
 
       const ticket = mapApiTicketToUi(created, categoriesRef.current, []);
       setTickets((prev) => [ticket, ...prev]);
@@ -256,6 +418,32 @@ export default function Home() {
           description: "لطفا اتصال و داده‌ها را بررسی کنید.",
           variant: "destructive",
         });
+    }
+  };
+
+  const handleTicketSeen = async (ticketId: string) => {
+    if (!token) return;
+
+    const nowIso = new Date().toISOString();
+    setTickets((prev) =>
+      prev.map((ticket) =>
+        ticket.id === ticketId
+          ? { ...ticket, isUnseen: false, isUnread: false, lastSeenAt: nowIso }
+          : ticket
+      )
+    );
+
+    try {
+      await apiRequest(`/api/tickets/${ticketId}/seen`, {
+        method: "POST",
+        token,
+      });
+    } catch (error) {
+      console.warn("Failed to mark ticket as seen", error);
+      toast({
+        title: "به‌روزرسانی خوانده‌شده ثبت نشد",
+        description: "اتصال یا سرور بررسی شود.",
+      });
     }
   };
 
@@ -392,12 +580,45 @@ export default function Home() {
       );
       await refreshTickets();
     } catch (error) {
-      console.error("Failed to add response", error);
+      const errorWithStatus = error as any;
+      const statusCode = errorWithStatus?.status as number | undefined;
+      const errorBody = errorWithStatus?.body as Record<string, any> | undefined;
+      const detail =
+        errorBody?.detail ||
+        errorBody?.message ||
+        errorWithStatus?.message ||
+        "لطفا مجددا تلاش کنید.";
+
+      if (process.env.NODE_ENV === "development") {
+        console.error("Failed to add response", {
+          status: statusCode,
+          detail,
+          traceId: errorBody?.traceId,
+          rawText: errorWithStatus?.rawText,
+        });
+      }
+
+      let description = "لطفا مجددا تلاش کنید.";
+      if (statusCode === 400) {
+        description = detail || "درخواست نامعتبر است.";
+      } else if (statusCode === 401) {
+        description = "نشست شما منقضی شده - لطفاً مجدداً وارد شوید";
+      } else if (statusCode === 403) {
+        description = "شما مجوز ارسال پاسخ برای این تیکت را ندارید";
+      } else if (statusCode === 404) {
+        description = "تیکت مورد نظر یافت نشد";
+      } else if (statusCode === 500) {
+        description = "خطای داخلی سرور - لطفاً مجدداً تلاش کنید";
+      } else if (detail) {
+        description = detail;
+      }
+
       toast({
         title: "ثبت پاسخ ناموفق بود",
-        description: "لطفا مجددا تلاش کنید.",
+        description,
         variant: "destructive",
       });
+      throw error;
     }
   };
 
@@ -458,7 +679,7 @@ export default function Home() {
         (ticket) => ticket.clientEmail === user.email
       );
       const newTicketCount = userTickets.filter(
-        (ticket) => ticket.status === "Open"
+        (ticket) => (ticket.displayStatus ?? ticket.status) === "Open"
       ).length;
 
       return [
@@ -495,10 +716,10 @@ export default function Home() {
         (ticket) => ticket.assignedTechnicianEmail === user.email
       );
       const inProgressCount = technicianTickets.filter(
-        (ticket) => ticket.status === "InProgress"
+        (ticket) => (ticket.displayStatus ?? ticket.status) === "InProgress"
       ).length;
       const closedCount = technicianTickets.filter(
-        (ticket) => ticket.status === "Resolved" || ticket.status === "Closed"
+        (ticket) => (ticket.displayStatus ?? ticket.status) === "Solved"
       ).length;
 
       return [
@@ -531,13 +752,22 @@ export default function Home() {
               target: "engineer.history",
               badge: closedCount,
             },
+            ...(isSupervisor
+              ? [
+                  {
+                    id: "engineer-technicians",
+                    title: "تکنسین‌ها",
+                    target: "engineer.technicians",
+                  },
+                ]
+              : []),
           ],
         },
       ];
     }
 
     const openTicketsCount = tickets.filter(
-      (ticket) => ticket.status === "Open"
+      (ticket) => (ticket.displayStatus ?? ticket.status) === "Open"
     ).length;
 
     return [
@@ -585,6 +815,12 @@ export default function Home() {
         icon: Settings2,
         target: "admin.auto-settings",
       },
+      {
+        id: "admin-technicians",
+        title: "مدیریت تکنسین‌ها",
+        icon: UserPlus,
+        target: "admin.technicians",
+      },
     ];
   }, [user, tickets, categoriesData]);
 
@@ -602,32 +838,31 @@ export default function Home() {
   }
 
   if (!user) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-100">
-        <div className="text-center space-y-2">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-slate-300 mx-auto" />
-          <p className="text-sm text-slate-300">Redirecting to login...</p>
-        </div>
-      </div>
-    );
+    return null;
   }
 // -------- Main dashboard content --------
 
-  const resolvedActiveView = activeView || getDefaultViewForRole(user.role);
-
   const dashboardContent = (() => {
+    // Show backend status banner when there's an error or data is empty
+    const showStatusBanner = loadError || (tickets.length === 0 && !isLoadingData);
+    
     if (user.role === "client") {
       const clientSection: "tickets" | "create" =
         resolvedActiveView === "client.create" ? "create" : "tickets";
 
       return (
-        <ClientDashboard
-          tickets={tickets}
-          onTicketCreate={handleTicketCreate}
-          currentUser={user}
-          categoriesData={categoriesData}
-          activeSection={clientSection}
-        />
+        <>
+          {showStatusBanner && <BackendStatusBanner />}
+          <ClientDashboard
+            tickets={tickets}
+            onTicketCreate={handleTicketCreate}
+            onTicketSeen={handleTicketSeen}
+            authToken={token}
+            currentUser={user}
+            categoriesData={categoriesData}
+            activeSection={clientSection}
+          />
+        </>
       );
     }
 
@@ -646,53 +881,44 @@ export default function Home() {
         setActiveView((prev) => (prev === next ? prev : next));
       };
 
-      // Load technician-specific tickets
-      const loadTechnicianTickets = async () => {
-        if (!token || user.role !== "engineer") return;
-        try {
-          const apiTickets = await apiRequest<ApiTicketResponse[]>("/api/technician/tickets", {
-            token,
-          });
 
-          const mapped = await Promise.all(
-            apiTickets.map(async (apiTicket) => {
-              const messages = await apiRequest<ApiTicketMessageDto[]>(
-                `/api/tickets/${apiTicket.id}/messages`,
-                { token }
-              );
-              return mapApiTicketToUi(apiTicket, categoriesRef.current, messages.map(mapApiMessageToResponse));
-            })
-          );
-          setTickets(mapped);
-        } catch (error) {
-          console.error("Failed to load technician tickets", error);
-        }
-      };
-
-      // Load technician tickets when engineer logs in
-      if (token && user.role === "engineer") {
-        loadTechnicianTickets();
+      if (resolvedActiveView === "engineer.technicians" && isSupervisor) {
+        return (
+          <>
+            {showStatusBanner && <BackendStatusBanner />}
+            <SupervisorTechnicianManagement />
+          </>
+        );
       }
 
       return (
-        <TechnicianDashboard
-          tickets={tickets}
-          onTicketUpdate={handleTicketUpdate}
-          onTicketRespond={handleTicketResponse}
-          currentUser={user}
-          activeSection={engineerSection}
-          onSectionChange={handleTechnicianSectionChange}
-        />
+        <>
+          {showStatusBanner && <BackendStatusBanner />}
+          <TechnicianDashboard
+            tickets={tickets}
+            onTicketUpdate={handleTicketUpdate}
+            onTicketRespond={handleTicketResponse}
+            onTicketSeen={handleTicketSeen}
+            isSupervisor={isSupervisor}
+            currentUser={user}
+            authToken={token}
+            activeSection={engineerSection}
+            onSectionChange={handleTechnicianSectionChange}
+          />
+        </>
       );
     }
 
     const adminSection:
       | "tickets"
       | "assignment"
+      | "technicians"
       | "categories"
       | "auto-settings" =
       resolvedActiveView === "admin.assignment"
         ? "assignment"
+        : resolvedActiveView === "admin.technicians"
+        ? "technicians"
         : resolvedActiveView === "admin.categories"
         ? "categories"
         : resolvedActiveView === "admin.auto-settings"
@@ -700,14 +926,18 @@ export default function Home() {
         : "tickets";
 
     return (
-      <AdminDashboard
-        tickets={tickets}
-        onTicketUpdate={handleTicketUpdate}
-        technicians={technicians}
-        categoriesData={categoriesData}
-        onCategoryUpdate={handleCategoryUpdate}
-        activeSection={adminSection}
-      />
+      <>
+        {showStatusBanner && <BackendStatusBanner />}
+        <AdminDashboard
+          tickets={tickets}
+          onTicketUpdate={handleTicketUpdate}
+          technicians={technicians}
+          categoriesData={categoriesData}
+          onCategoryUpdate={handleCategoryUpdate}
+          activeSection={adminSection}
+          authToken={token}
+        />
+      </>
     );
   })();
 

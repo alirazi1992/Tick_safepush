@@ -1,8 +1,7 @@
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Ticketing.Backend.Application.Repositories;
 using Ticketing.Backend.Domain.Entities;
 using Ticketing.Backend.Domain.Enums;
-using Ticketing.Backend.Infrastructure.Data;
 
 namespace Ticketing.Backend.Application.Services;
 
@@ -14,14 +13,20 @@ public interface ISmartAssignmentService
 
 public class SmartAssignmentService : ISmartAssignmentService
 {
-    private readonly AppDbContext _context;
-    private readonly ITechnicianService _technicianService;
+    private readonly ITicketRepository _ticketRepository;
+    private readonly ITechnicianRepository _technicianRepository;
+    private readonly IUnitOfWork _unitOfWork;
     private readonly ILogger<SmartAssignmentService> _logger;
 
-    public SmartAssignmentService(AppDbContext context, ITechnicianService technicianService, ILogger<SmartAssignmentService> logger)
+    public SmartAssignmentService(
+        ITicketRepository ticketRepository,
+        ITechnicianRepository technicianRepository,
+        IUnitOfWork unitOfWork,
+        ILogger<SmartAssignmentService> logger)
     {
-        _context = context;
-        _technicianService = technicianService;
+        _ticketRepository = ticketRepository;
+        _technicianRepository = technicianRepository;
+        _unitOfWork = unitOfWork;
         _logger = logger;
     }
 
@@ -30,8 +35,7 @@ public class SmartAssignmentService : ISmartAssignmentService
     /// </summary>
     public async Task<Guid?> AssignTechnicianToTicketAsync(Guid ticketId)
     {
-        var ticket = await _context.Tickets
-            .FirstOrDefaultAsync(t => t.Id == ticketId);
+        var ticket = await _ticketRepository.GetByIdAsync(ticketId);
 
         if (ticket == null || ticket.TechnicianId != null)
         {
@@ -40,25 +44,20 @@ public class SmartAssignmentService : ISmartAssignmentService
 
         // Get all active technicians that have a linked User account (UserId != null)
         // Technicians without UserId cannot be assigned - it would leave AssignedToUserId null
-        var eligibleTechnicians = await _context.Technicians
-            .Where(t => t.IsActive && t.UserId != null)
-            .ToListAsync();
+        var eligibleTechnicians = await _technicianRepository.GetActiveWithUserIdAsync();
 
-        if (eligibleTechnicians.Count == 0)
+        if (!eligibleTechnicians.Any())
         {
             return null; // No eligible technicians available (active + linked to User)
         }
 
         // Calculate load for each technician (count of open/in-progress tickets)
         var technicianLoads = new List<(Guid TechnicianId, int LoadCount)>();
+        var activeStatuses = new[] { TicketStatus.Submitted, TicketStatus.SeenRead, TicketStatus.Open, TicketStatus.InProgress, TicketStatus.Redo };
 
         foreach (var tech in eligibleTechnicians)
         {
-            var loadCount = await _context.Tickets
-                .CountAsync(t => 
-                    t.TechnicianId == tech.Id && 
-                    (t.Status == TicketStatus.Submitted || t.Status == TicketStatus.Viewed || t.Status == TicketStatus.Open || t.Status == TicketStatus.InProgress));
-
+            var loadCount = await _ticketRepository.CountByTechnicianIdAndStatusAsync(tech.Id, activeStatuses);
             technicianLoads.Add((tech.Id, loadCount));
         }
 
@@ -69,8 +68,7 @@ public class SmartAssignmentService : ISmartAssignmentService
             .First();
 
         // Load technician to get UserId for AssignedToUserId
-        var technician = await _context.Technicians
-            .FirstOrDefaultAsync(t => t.Id == selectedTechnician.TechnicianId);
+        var technician = await _technicianRepository.GetByIdAsync(selectedTechnician.TechnicianId);
         
         if (technician == null)
         {
@@ -97,7 +95,8 @@ public class SmartAssignmentService : ISmartAssignmentService
         }
         ticket.UpdatedAt = DateTime.UtcNow;
 
-        await _context.SaveChangesAsync();
+        await _ticketRepository.UpdateAsync(ticket);
+        await _unitOfWork.SaveChangesAsync();
 
         _logger.LogInformation(
             "SmartAssignment SUCCESS: Ticket {TicketId} assigned to Technician {TechnicianId} (UserId={UserId})",
@@ -111,21 +110,7 @@ public class SmartAssignmentService : ISmartAssignmentService
     /// </summary>
     public async Task<int> AssignUnassignedTicketsAsync(DateTime? startDate = null, DateTime? endDate = null)
     {
-        var query = _context.Tickets
-            .Where(t => t.TechnicianId == null)
-            .AsQueryable();
-
-        if (startDate.HasValue)
-        {
-            query = query.Where(t => t.CreatedAt >= startDate.Value);
-        }
-
-        if (endDate.HasValue)
-        {
-            query = query.Where(t => t.CreatedAt <= endDate.Value);
-        }
-
-        var unassignedTickets = await query.ToListAsync();
+        var unassignedTickets = await _ticketRepository.GetUnassignedTicketsAsync(startDate, endDate);
         int assignedCount = 0;
 
         foreach (var ticket in unassignedTickets)

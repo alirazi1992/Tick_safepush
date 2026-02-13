@@ -25,16 +25,59 @@ public class UsersController : ControllerBase
     [Authorize(Roles = nameof(UserRole.Admin))]
     public async Task<IActionResult> GetUsers()
     {
-        var users = await _userService.GetAllAsync();
-        return Ok(users);
+        try
+        {
+            var users = await _userService.GetAllAsync();
+            return Ok(users);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "An error occurred while retrieving users", error = ex.Message });
+        }
     }
 
     [HttpGet("technicians")]
-    [Authorize(Roles = nameof(UserRole.Admin))]
+    [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.Technician)}")] // Allow Admin and Technician to read
     public async Task<IActionResult> GetTechnicians()
     {
-        var users = await _userService.GetTechniciansAsync();
-        return Ok(users);
+        try
+        {
+            var users = await _userService.GetTechniciansAsync();
+            return Ok(users);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "An error occurred while retrieving technicians", error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Get current user profile (backward compatibility for /api/user)
+    /// </summary>
+    [HttpGet("me")]
+    [Authorize]
+    public async Task<IActionResult> GetCurrentUser()
+    {
+        try
+        {
+            var userId = GetCurrentUserId();
+            if (userId == null)
+            {
+                return Unauthorized(new { message = "User not authenticated" });
+            }
+
+            var user = await _userService.GetByIdAsync(userId.Value);
+            if (user == null)
+            {
+                return NotFound(new { message = "User not found" });
+            }
+
+            return Ok(user);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "An error occurred while retrieving user profile", error = ex.Message });
+        }
     }
 
     /// <summary>
