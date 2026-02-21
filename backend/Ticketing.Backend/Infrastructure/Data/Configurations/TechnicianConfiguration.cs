@@ -31,8 +31,23 @@ public class TechnicianConfiguration : IEntityTypeConfiguration<Technician>
             .IsRequired()
             .HasDefaultValue(true);
 
+        builder.Property(t => t.IsSupervisor)
+            .IsRequired()
+            .HasDefaultValue(false);
+
         builder.Property(t => t.CreatedAt)
             .IsRequired();
+
+        // Soft delete fields
+        builder.Property(t => t.IsDeleted)
+            .IsRequired()
+            .HasDefaultValue(false);
+
+        builder.Property(t => t.DeletedAt)
+            .IsRequired(false);
+
+        builder.Property(t => t.DeletedByUserId)
+            .IsRequired(false);
 
         // Relationship with User (optional)
         builder.HasOne(t => t.User)
@@ -40,11 +55,19 @@ public class TechnicianConfiguration : IEntityTypeConfiguration<Technician>
             .HasForeignKey(t => t.UserId)
             .OnDelete(DeleteBehavior.SetNull);
 
+        // Relationship with DeletedByUser (optional)
+        builder.HasOne(t => t.DeletedByUser)
+            .WithMany()
+            .HasForeignKey(t => t.DeletedByUserId)
+            .OnDelete(DeleteBehavior.SetNull);
+
         // Relationship with Tickets
         builder.HasMany(t => t.AssignedTickets)
             .WithOne(t => t.Technician)
             .HasForeignKey(t => t.TechnicianId)
             .OnDelete(DeleteBehavior.SetNull);
+
+        // Global query filter to exclude soft-deleted technicians by default
+        builder.HasQueryFilter(t => !t.IsDeleted);
     }
 }
-

@@ -10,14 +10,15 @@ public static class SeedData
 {
     public static async Task InitializeAsync(AppDbContext context, IPasswordHasher<User> passwordHasher)
     {
-        // Ensure baseline users exist (idempotent)
+        // Seed/test users — all use the same known password: Test123!
+        const string SeedPassword = "Test123!";
         var userSeeds = new[]
         {
-            new { FullName = "Admin User", Email = "admin@test.com", Role = UserRole.Admin, Password = "Admin123!", Phone = "+989000000000", Department = "IT" },
-            new { FullName = "Tech One", Email = "tech1@test.com", Role = UserRole.Technician, Password = "Tech123!", Phone = "+989000000001", Department = "Field Support" },
-            new { FullName = "Tech Two", Email = "tech2@test.com", Role = UserRole.Technician, Password = "Tech123!", Phone = "+989000000002", Department = "Network" },
-            new { FullName = "Client One", Email = "client1@test.com", Role = UserRole.Client, Password = "Client123!", Phone = "+989000000010", Department = "Finance" },
-            new { FullName = "Client Two", Email = "client2@test.com", Role = UserRole.Client, Password = "Client123!", Phone = "+989000000011", Department = "Sales" },
+            new { FullName = "Admin User", Email = "admin@test.com", Role = UserRole.Admin, Phone = "+989000000000", Department = "IT" },
+            new { FullName = "Tech One", Email = "tech1@test.com", Role = UserRole.Technician, Phone = "+989000000001", Department = "Field Support" },
+            new { FullName = "Tech Two", Email = "tech2@test.com", Role = UserRole.Technician, Phone = "+989000000002", Department = "Network" },
+            new { FullName = "Client One", Email = "client1@test.com", Role = UserRole.Client, Phone = "+989000000010", Department = "Finance" },
+            new { FullName = "Client Two", Email = "client2@test.com", Role = UserRole.Client, Phone = "+989000000011", Department = "Sales" },
         };
 
         foreach (var seed in userSeeds)
@@ -35,9 +36,39 @@ public static class SeedData
                     Department = seed.Department,
                     CreatedAt = DateTime.UtcNow
                 };
-                user.PasswordHash = passwordHasher.HashPassword(user, seed.Password);
+                user.PasswordHash = passwordHasher.HashPassword(user, SeedPassword);
                 context.Users.Add(user);
             }
+            else
+            {
+                // Ensure existing seed users always have the known password
+                existing.PasswordHash = passwordHasher.HashPassword(existing, SeedPassword);
+            }
+        }
+
+        // Guarantee deterministic Admin test user (admin@test.com / Admin123!)
+        const string AdminTestEmail = "admin@test.com";
+        const string AdminTestPassword = "Admin123!";
+        var adminUser = await context.Users.FirstOrDefaultAsync(u => u.Email == AdminTestEmail);
+        if (adminUser != null)
+        {
+            adminUser.PasswordHash = passwordHasher.HashPassword(adminUser, AdminTestPassword);
+            adminUser.Role = UserRole.Admin;
+        }
+        else
+        {
+            var newAdmin = new User
+            {
+                Id = Guid.NewGuid(),
+                FullName = "System Administrator",
+                Email = AdminTestEmail,
+                Role = UserRole.Admin,
+                PhoneNumber = "+989000000000",
+                Department = "IT",
+                CreatedAt = DateTime.UtcNow
+            };
+            newAdmin.PasswordHash = passwordHasher.HashPassword(newAdmin, AdminTestPassword);
+            context.Users.Add(newAdmin);
         }
 
         await context.SaveChangesAsync();
@@ -91,6 +122,7 @@ public static class SeedData
                 category = new Category
                 {
                     Name = seed.Name,
+                    NormalizedName = NormalizeName(seed.Name),
                     Description = seed.Description,
                     Subcategories = seed.Subs.Select(s => new Subcategory { Name = s }).ToList()
                 };
@@ -98,6 +130,11 @@ public static class SeedData
             }
             else
             {
+                if (string.IsNullOrWhiteSpace(category.NormalizedName))
+                {
+                    category.NormalizedName = NormalizeName(category.Name);
+                }
+
                 if (string.IsNullOrWhiteSpace(category.Description))
                 {
                     category.Description = seed.Description;
@@ -200,7 +237,7 @@ public static class SeedData
                     CategoryId = network.Id,
                     SubcategoryId = network.Subcategories.First(sc => sc.Name == "WiFi Problems").Id,
                     Priority = TicketPriority.High,
-                    Status = TicketStatus.Resolved,
+                    Status = TicketStatus.Solved,
                     CreatedByUserId = client2.Id,
                     AssignedToUserId = tech1.Id,
                     TechnicianId = techProfile1?.Id,
@@ -245,28 +282,6 @@ public static class SeedData
 
             context.TicketMessages.AddRange(messages);
 
-            var notifications = new List<Notification>
-            {
-                new()
-                {
-                    Id = Guid.NewGuid(),
-                    UserId = tech1.Id,
-                    Message = "New ticket assigned: VPN not connecting",
-                    IsRead = false,
-                    CreatedAt = DateTime.UtcNow.AddDays(-2)
-                },
-                new()
-                {
-                    Id = Guid.NewGuid(),
-                    UserId = client1.Id,
-                    Message = "Technician replied to your ticket",
-                    IsRead = false,
-                    CreatedAt = DateTime.UtcNow.AddDays(-1)
-                }
-            };
-
-            context.Notifications.AddRange(notifications);
-            await context.SaveChangesAsync();
         }
 
         // Ensure default system settings exist (idempotent)
@@ -304,5 +319,68 @@ public static class SeedData
             context.SystemSettings.Add(defaultSettings);
             await context.SaveChangesAsync();
         }
+    }
+
+    /// <summary>
+    /// Ensures every technician in the Technicians table has a corresponding User (identity).
+    /// Creates missing users (Role=Technician; supervisor claim from IsSupervisor), sets password to Test123! for all.
+    /// Returns a report: Email, Roles, and "created" or "updated".
+    /// </summary>
+    public static async Task<IReadOnlyList<TechnicianUserSyncReport>> SyncTechnicianUsersAsync(
+        AppDbContext context,
+        IPasswordHasher<User> passwordHasher)
+    {
+        const string TechnicianPassword = "Test123!";
+        var report = new List<TechnicianUserSyncReport>();
+
+        var technicians = await context.Technicians
+            .Where(t => !t.IsDeleted)
+            .ToListAsync();
+
+        foreach (var tech in technicians)
+        {
+            if (string.IsNullOrWhiteSpace(tech.Email))
+                continue;
+
+            var user = await context.Users
+                .FirstOrDefaultAsync(u => u.Id == tech.UserId || u.Email == tech.Email);
+
+            var roles = tech.IsSupervisor ? "Technician, Supervisor" : "Technician";
+            if (user == null)
+            {
+                user = new User
+                {
+                    Id = Guid.NewGuid(),
+                    FullName = tech.FullName,
+                    Email = tech.Email,
+                    Role = UserRole.Technician,
+                    PhoneNumber = tech.Phone,
+                    Department = tech.Department,
+                    CreatedAt = DateTime.UtcNow
+                };
+                user.PasswordHash = passwordHasher.HashPassword(user, TechnicianPassword);
+                context.Users.Add(user);
+                tech.UserId = user.Id;
+                report.Add(new TechnicianUserSyncReport(tech.Email, roles, "created"));
+            }
+            else
+            {
+                user.PasswordHash = passwordHasher.HashPassword(user, TechnicianPassword);
+                user.Role = UserRole.Technician;
+                if (tech.UserId != user.Id)
+                    tech.UserId = user.Id;
+                report.Add(new TechnicianUserSyncReport(tech.Email, roles, "updated"));
+            }
+        }
+
+        await context.SaveChangesAsync();
+        return report;
+    }
+
+    public record TechnicianUserSyncReport(string Email, string Roles, string Status);
+
+    private static string NormalizeName(string name)
+    {
+        return name.Trim().ToUpperInvariant();
     }
 }

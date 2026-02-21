@@ -36,6 +36,7 @@ import {
   AlertTriangle,
   Play,
 } from "lucide-react"
+import { AutomationCoverageView } from "./automation-coverage-view"
 
 interface AssignmentCriteria {
   expertise: number // 0-100
@@ -244,14 +245,16 @@ interface EnhancedAutoAssignmentProps {
   tickets: any[]
   technicians: TechnicianProfile[]
   onTicketUpdate: (ticketId: string, updates: any) => void
+  onTabChange?: (tab: string) => void
 }
 
 export function EnhancedAutoAssignment({
   tickets,
   technicians: technicianOptions,
   onTicketUpdate,
+  onTabChange,
 }: EnhancedAutoAssignmentProps) {
-  const { token } = useAuth()
+  const { token, user } = useAuth()
   const [isEnabled, setIsEnabled] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -272,7 +275,7 @@ export function EnhancedAutoAssignment({
   }, [token])
 
   const loadStatus = async () => {
-    if (!token) return
+    if (!user) return
     setLoading(true)
     try {
       const status = await getSmartAssignmentStatus(token)
@@ -290,7 +293,7 @@ export function EnhancedAutoAssignment({
   }
 
   const handleToggle = async (enabled: boolean) => {
-    if (!token) return
+    if (!user) return
     setSaving(true)
     try {
       await updateSmartAssignmentStatus(token, enabled)
@@ -316,7 +319,7 @@ export function EnhancedAutoAssignment({
   }
 
   const handleRunNow = async () => {
-    if (!token) return
+    if (!user) return
     setRunningAssignment(true)
     try {
       const result = await runSmartAssignment(token)
@@ -553,7 +556,7 @@ export function EnhancedAutoAssignment({
       onTicketUpdate(ticket.id, {
         assignedTo: bestTech.id,
         assignedTechnicianName: bestTech.name,
-        status: ticket.status === "Open" ? "InProgress" : ticket.status,
+        status: (ticket.displayStatus ?? ticket.status) === "Open" ? "InProgress" : (ticket.displayStatus ?? ticket.status),
       })
 
       toast({
@@ -592,8 +595,21 @@ export function EnhancedAutoAssignment({
     setRules(rules.map((rule) => (rule.id === ruleId ? { ...rule, enabled: !rule.enabled } : rule)))
   }
 
+  // Navigation handlers for coverage view
+  const handleNavigateToCategories = () => onTabChange?.("categories")
+  const handleNavigateToTechnicians = () => onTabChange?.("technicians")
+  const handleNavigateToTickets = () => onTabChange?.("tickets")
+
   return (
     <div className="space-y-6" dir="rtl">
+      {/* Coverage Visualization Section */}
+      <AutomationCoverageView 
+        onNavigateToCategories={handleNavigateToCategories}
+        onNavigateToTechnicians={handleNavigateToTechnicians}
+        onNavigateToTickets={handleNavigateToTickets}
+      />
+
+      {/* Smart Assignment Settings */}
       <Card>
         <CardHeader>
           <div className="flex justify-between items-center">
@@ -927,7 +943,7 @@ export function EnhancedAutoAssignment({
 
       {}
       <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto" dir="rtl">
+        <DialogContent className="max-h-[85vh] overflow-y-auto w-[95vw] sm:w-[90vw] md:max-w-4xl" dir="rtl">
           <DialogHeader>
             <DialogTitle className="text-right">ویرایش قانون تعیین هوشمند</DialogTitle>
           </DialogHeader>
@@ -1013,7 +1029,7 @@ export function EnhancedAutoAssignment({
 
       {}
       <Dialog open={simulationDialogOpen} onOpenChange={setSimulationDialogOpen}>
-        <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto" dir="rtl">
+        <DialogContent className="max-h-[85vh] overflow-y-auto w-[95vw] sm:w-[90vw] md:max-w-5xl" dir="rtl">
           <DialogHeader>
             <DialogTitle className="text-right">نتایج شبیه‌سازی تعیین هوشمند</DialogTitle>
           </DialogHeader>

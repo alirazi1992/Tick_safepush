@@ -1,0 +1,157 @@
+{
+  "$schema": "http://json.schemastore.org/sarif-1.0.0",
+  "version": "1.0.0",
+  "runs": [
+    {
+      "tool": {
+        "name": "Microsoft (R) Visual C# Compiler",
+        "version": "4.11.0.0",
+        "fileVersion": "4.11.0-3.24554.2 (bc1c3011)",
+        "semanticVersion": "4.11.0",
+        "language": "en-US"
+      },
+      "results": [
+        {
+          "ruleId": "S2479",
+          "level": "warning",
+          "message": "Replace the control character at position 15 by its escape sequence '\\u200C'.",
+          "locations": [
+            {
+              "resultFile": {
+                "uri": "file:///C:/Users/user/Desktop/42/TikQ/backend/Ticketing.Backend/src/Ticketing.Application/DTOs/SystemSettingsDtos.cs",
+                "region": {
+                  "startLine": 43,
+                  "startColumn": 39,
+                  "endLine": 43,
+                  "endColumn": 87
+                }
+              }
+            }
+          ],
+          "properties": {
+            "warningLevel": 1
+          }
+        },
+        {
+          "ruleId": "S2479",
+          "level": "warning",
+          "message": "Replace the control character at position 15 by its escape sequence '\\u200C'.",
+          "locations": [
+            {
+              "resultFile": {
+                "uri": "file:///C:/Users/user/Desktop/42/TikQ/backend/Ticketing.Backend/src/Ticketing.Application/DTOs/SystemSettingsDtos.cs",
+                "region": {
+                  "startLine": 50,
+                  "startColumn": 38,
+                  "endLine": 50,
+                  "endColumn": 85
+                }
+              }
+            }
+          ],
+          "properties": {
+            "warningLevel": 1
+          }
+        },
+        {
+          "ruleId": "S1133",
+          "level": "warning",
+          "message": "Do not forget to remove this deprecated code someday.",
+          "locations": [
+            {
+              "resultFile": {
+                "uri": "file:///C:/Users/user/Desktop/42/TikQ/backend/Ticketing.Backend/src/Ticketing.Application/DTOs/TicketDtos.cs",
+                "region": {
+                  "startLine": 126,
+                  "startColumn": 6,
+                  "endLine": 126,
+                  "endColumn": 52
+                }
+              }
+            }
+          ],
+          "properties": {
+            "warningLevel": 1
+          }
+        },
+        {
+          "ruleId": "S1133",
+          "level": "warning",
+          "message": "Do not forget to remove this deprecated code someday.",
+          "locations": [
+            {
+              "resultFile": {
+                "uri": "file:///C:/Users/user/Desktop/42/TikQ/backend/Ticketing.Backend/src/Ticketing.Application/DTOs/TicketDtos.cs",
+                "region": {
+                  "startLine": 81,
+                  "startColumn": 6,
+                  "endLine": 81,
+                  "endColumn": 81
+                }
+              }
+            }
+          ],
+          "properties": {
+            "warningLevel": 1
+          }
+        },
+        {
+          "ruleId": "S1133",
+          "level": "warning",
+          "message": "Do not forget to remove this deprecated code someday.",
+          "locations": [
+            {
+              "resultFile": {
+                "uri": "file:///C:/Users/user/Desktop/42/TikQ/backend/Ticketing.Backend/src/Ticketing.Application/DTOs/TicketDtos.cs",
+                "region": {
+                  "startLine": 198,
+                  "startColumn": 6,
+                  "endLine": 198,
+                  "endColumn": 52
+                }
+              }
+            }
+          ],
+          "properties": {
+            "warningLevel": 1
+          }
+        }
+      ],
+      "rules": {
+        "S1133": {
+          "id": "S1133",
+          "shortDescription": "Deprecated code should be removed",
+          "fullDescription": "This rule is meant to be used as a way to track code which is marked as being deprecated. Deprecated code should eventually be removed.",
+          "defaultLevel": "warning",
+          "helpUri": "https://rules.sonarsource.com/csharp/RSPEC-1133",
+          "properties": {
+            "category": "Info Code Smell",
+            "isEnabledByDefault": true,
+            "tags": [
+              "C#",
+              "MainSourceScope",
+              "TestSourceScope",
+              "SonarWay"
+            ]
+          }
+        },
+        "S2479": {
+          "id": "S2479",
+          "shortDescription": "Whitespace and control characters in string literals should be explicit",
+          "fullDescription": "Non-encoded control characters and whitespace characters are often injected in the source code because of a bad manipulation. They are either invisible or difficult to recognize, which can result in bugs when the string is not what the developer expects. If you actually need to use a control character use their encoded version:",
+          "defaultLevel": "warning",
+          "helpUri": "https://rules.sonarsource.com/csharp/RSPEC-2479",
+          "properties": {
+            "category": "Critical Code Smell",
+            "isEnabledByDefault": true,
+            "tags": [
+              "C#",
+              "MainSourceScope",
+              "SonarWay"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

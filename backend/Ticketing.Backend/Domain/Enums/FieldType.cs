@@ -6,6 +6,7 @@ public enum FieldType
     Number,
     Date,
     Select,
+    MultiSelect,
     TextArea,
     Email,
     Phone,

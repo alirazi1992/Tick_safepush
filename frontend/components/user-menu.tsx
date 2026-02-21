@@ -26,19 +26,19 @@ export function UserMenu() {
     switch (role) {
       case "admin":
         return <Shield className="w-3 h-3" />
-      case "engineer":
+      case "technician":
         return <Wrench className="w-3 h-3" />
       default:
         return <User className="w-3 h-3" />
     }
   }
 
-  const getRoleLabel = (role: string) => {
+  const getRoleLabel = (role: string, isSupervisor?: boolean) => {
     switch (role) {
       case "admin":
         return "مدیر سیستم"
-      case "engineer":
-        return "تکنسین"
+      case "technician":
+        return isSupervisor ? "سرپرست فنی" : "تکنسین"
       default:
         return "کاربر"
     }
@@ -48,7 +48,7 @@ export function UserMenu() {
     switch (role) {
       case "admin":
         return "bg-purple-100 text-purple-800 border-purple-200"
-      case "engineer":
+      case "technician":
         return "bg-blue-100 text-blue-800 border-blue-200"
       default:
         return "bg-green-100 text-green-800 border-green-200"
@@ -85,7 +85,7 @@ export function UserMenu() {
               <div className="flex items-center gap-2 justify-end">
                 <Badge className={getRoleBadgeColor(user.role)}>
                   <div className="flex items-center gap-1">
-                    <span>{getRoleLabel(user.role)}</span>
+                    <span>{getRoleLabel(user.role, user.isSupervisor)}</span>
                     {getRoleIcon(user.role)}
                   </div>
                 </Badge>

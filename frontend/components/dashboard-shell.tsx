@@ -14,6 +14,7 @@ import { useTheme } from "next-themes"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Sheet, SheetContent } from "@/components/ui/sheet"
 import { cn } from "@/lib/utils"
 import { UserMenu } from "@/components/user-menu"
 import { usePreferences } from "@/lib/preferences-context"
@@ -34,7 +35,7 @@ export interface DashboardNavItem {
   children?: DashboardNavChild[]
 }
 
-type Role = "admin" | "engineer" | "client"
+type Role = "admin" | "technician" | "client"
 
 interface DashboardShellProps {
   user: {
@@ -63,7 +64,7 @@ const roleMeta: Record<
     badgeClass:
       "border-purple-300 bg-purple-100 text-purple-900 dark:border-purple-500/40 dark:bg-purple-500/10 dark:text-purple-100",
   },
-  engineer: {
+  technician: {
     label: "کارشناس فنی",
     badgeClass:
       "border-blue-300 bg-blue-100 text-blue-900 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-100",
@@ -153,8 +154,8 @@ export function DashboardShell({ user, navItems, activeItem, onSelect, children 
               <p className="text-sm font-semibold text-foreground">{user.name}</p>
               <p className="text-xs text-muted-foreground">{user.department || "بدون دپارتمان"}</p>
               <div className="mt-2 flex flex-wrap gap-2 justify-end">
-                <Badge className={cn("border px-3 py-1", roleMeta[user.role].badgeClass)}>
-                  {roleMeta[user.role].label}
+                <Badge className={cn("border px-3 py-1", (roleMeta[user.role] ?? roleMeta.client).badgeClass)}>
+                  {(roleMeta[user.role] ?? roleMeta.client).label}
                 </Badge>
                 {user.title && <Badge className="border-border bg-muted text-muted-foreground">{user.title}</Badge>}
               </div>
@@ -245,45 +246,38 @@ export function DashboardShell({ user, navItems, activeItem, onSelect, children 
   )
 
   return (
-    <div className="min-h-screen bg-background text-foreground" dir="rtl">
-      {mobileSidebarOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden"
-          onClick={() => setMobileSidebarOpen(false)}
-        />
-      )}
+    <div className="min-h-screen bg-background text-foreground overflow-x-hidden" dir="rtl">
+      <Sheet open={mobileSidebarOpen} onOpenChange={setMobileSidebarOpen}>
+        <SheetContent side="right" className="w-72 p-0 flex flex-col border-l border-border bg-card overflow-hidden [&>button]:left-4 [&>button]:right-auto">
+          <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+            {renderNav(false)}
+          </div>
+        </SheetContent>
+      </Sheet>
 
-      <div className="flex min-h-screen">
+      <div className="flex min-h-screen min-w-0">
         <aside
           className={cn(
-            "fixed inset-y-0 right-0 z-50 flex w-72 flex-col bg-card shadow-2xl transition-transform lg:hidden border-l border-border",
-            mobileSidebarOpen ? "translate-x-0" : "translate-x-full",
-          )}
-        >
-          {renderNav(false)}
-        </aside>
-
-        <aside
-          className={cn(
-            "hidden lg:flex lg:flex-col lg:border-l lg:border-border lg:bg-card lg:shadow-xl lg:transition-all lg:duration-300",
-            sidebarCollapsed ? "lg:w-24" : "lg:w-72",
+            "hidden md:flex md:flex-col md:border-l md:border-border md:bg-card md:shadow-xl md:transition-all md:duration-300 shrink-0",
+            sidebarCollapsed ? "md:w-24" : "md:w-72",
           )}
         >
           {renderNav(sidebarCollapsed)}
         </aside>
 
-        <div className="flex min-h-screen flex-1 flex-col lg:mr-0">
-          <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border bg-background/95 px-4 shadow-md backdrop-blur">
-            <div className="flex items-center gap-2">
+        <div className="flex min-h-screen flex-1 flex-col min-w-0 md:mr-0">
+          <header className="sticky top-0 z-30 flex h-14 sm:h-16 items-center justify-between border-b border-border bg-background/95 px-3 sm:px-4 shadow-md backdrop-blur shrink-0">
+            <div className="flex items-center gap-2 min-w-0">
               <Button
                 variant="ghost"
                 size="icon"
-                className="text-muted-foreground hover:text-foreground lg:hidden"
+                className="text-muted-foreground hover:text-foreground shrink-0 md:hidden"
                 onClick={() => setMobileSidebarOpen(true)}
+                aria-label="منو"
               >
                 <Menu className="h-5 w-5" />
               </Button>
-              <div className="hidden lg:flex lg:items-center lg:gap-2">
+              <div className="hidden md:flex md:items-center md:gap-2 min-w-0 truncate">
                 <span className="text-sm text-muted-foreground">مسیر</span>
                 <span className="text-sm text-muted-foreground">/</span>
                 <span className="text-sm font-medium text-foreground">
@@ -310,8 +304,8 @@ export function DashboardShell({ user, navItems, activeItem, onSelect, children 
             </div>
           </header>
 
-          <main className="flex-1 overflow-y-auto bg-background">
-            <div className="mx-auto w-full max-w-7xl px-4 py-8 lg:px-8">{children}</div>
+          <main className="flex-1 overflow-y-auto overflow-x-hidden bg-background min-w-0">
+            <div className="mx-auto w-full max-w-7xl px-3 sm:px-6 lg:px-8 py-4 sm:py-6 lg:py-8 min-w-0">{children}</div>
           </main>
         </div>
       </div>

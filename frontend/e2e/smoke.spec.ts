@@ -1,12 +1,13 @@
 import { test, expect, Page, APIRequestContext } from '@playwright/test';
+import { normalizeBaseUrl, getDefaultApiBaseUrl } from '../lib/url';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:5000';
+const API_BASE_URL = normalizeBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL) || getDefaultApiBaseUrl();
 
 // Seed user credentials (from SeedData.cs)
 const SEED_USERS = {
-  admin: { email: 'admin@test.com', password: 'Admin123!' },
-  technician: { email: 'tech1@test.com', password: 'Tech123!' },
-  client: { email: 'client1@test.com', password: 'Client123!' },
+  admin: { email: 'admin@test.com', password: 'Test123!' },
+  technician: { email: 'tech1@test.com', password: 'Test123!' },
+  client: { email: 'client1@test.com', password: 'Test123!' },
 };
 
 // Helper to capture console errors
@@ -161,7 +162,7 @@ test.describe('Frontend Smoke Tests', () => {
   test('End-to-end: Create ticket via API, verify in UI', async ({ page, request }) => {
     const errors = setupConsoleErrorCapture(page);
     
-    // Step 1: Login as client via API to get token
+    // Step 1: Login as client via API (cookie tikq_access is set; no token in body)
     const loginResponse = await request.post(`${API_BASE_URL}/api/auth/login`, {
       data: {
         email: SEED_USERS.client.email,
@@ -171,10 +172,10 @@ test.describe('Frontend Smoke Tests', () => {
     
     expect(loginResponse.ok()).toBeTruthy();
     const loginData = await loginResponse.json();
-    expect(loginData.token).toBeTruthy();
-    const token = loginData.token;
+    expect(loginData.ok).toBe(true);
+    expect(loginData.landingPath).toBeDefined();
     
-    // Step 2: Get categories
+    // Step 2: Get categories (same request context sends cookie)
     const categoriesResponse = await request.get(`${API_BASE_URL}/api/categories`);
     expect(categoriesResponse.ok()).toBeTruthy();
     const categories = await categoriesResponse.json();
@@ -183,10 +184,9 @@ test.describe('Frontend Smoke Tests', () => {
     const categoryId = categories[0].id;
     const subcategoryId = categories[0].subcategories?.[0]?.id || null;
     
-    // Step 3: Create ticket via API
+    // Step 3: Create ticket via API (cookie sent by request context; no Bearer header)
     const createTicketResponse = await request.post(`${API_BASE_URL}/api/tickets`, {
       headers: {
-        'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
       data: {

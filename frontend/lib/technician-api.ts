@@ -37,9 +37,6 @@ export interface ApiAssignTechnicianRequest {
  * Get all technicians (Admin only)
  */
 export async function getAllTechnicians(token: string | null): Promise<ApiTechnicianResponse[]> {
-  if (!token) {
-    throw new Error("Authentication required")
-  }
   return apiRequest<ApiTechnicianResponse[]>("/api/admin/technicians", {
     method: "GET",
     token,
@@ -50,9 +47,6 @@ export async function getAllTechnicians(token: string | null): Promise<ApiTechni
  * Get technician by ID (Admin only)
  */
 export async function getTechnicianById(token: string | null, id: string): Promise<ApiTechnicianResponse> {
-  if (!token) {
-    throw new Error("Authentication required")
-  }
   return apiRequest<ApiTechnicianResponse>(`/api/admin/technicians/${id}`, {
     method: "GET",
     token,
@@ -66,9 +60,6 @@ export async function createTechnician(
   token: string | null,
   technician: ApiTechnicianCreateRequest
 ): Promise<ApiTechnicianResponse> {
-  if (!token) {
-    throw new Error("Authentication required")
-  }
   return apiRequest<ApiTechnicianResponse>("/api/admin/technicians", {
     method: "POST",
     token,
@@ -84,9 +75,6 @@ export async function updateTechnician(
   id: string,
   technician: ApiTechnicianUpdateRequest
 ): Promise<ApiTechnicianResponse> {
-  if (!token) {
-    throw new Error("Authentication required")
-  }
   return apiRequest<ApiTechnicianResponse>(`/api/admin/technicians/${id}`, {
     method: "PUT",
     token,
@@ -102,9 +90,6 @@ export async function updateTechnicianStatus(
   id: string,
   isActive: boolean
 ): Promise<void> {
-  if (!token) {
-    throw new Error("Authentication required")
-  }
   return apiRequest<void>(`/api/admin/technicians/${id}/status`, {
     method: "PATCH",
     token,
@@ -120,9 +105,6 @@ export async function assignTechnicianToTicket(
   ticketId: string,
   technicianId: string
 ): Promise<any> {
-  if (!token) {
-    throw new Error("Authentication required")
-  }
   return apiRequest<any>(`/api/tickets/${ticketId}/assign-technician`, {
     method: "PUT",
     token,

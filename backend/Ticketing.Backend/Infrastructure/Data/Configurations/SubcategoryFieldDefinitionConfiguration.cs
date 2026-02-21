@@ -23,6 +23,9 @@ public class SubcategoryFieldDefinitionConfiguration : IEntityTypeConfiguration<
         builder.Property(f => f.OptionsJson).HasColumnType("TEXT");
         builder.Property(f => f.Min).HasColumnType("REAL");
         builder.Property(f => f.Max).HasColumnType("REAL");
+        builder.Property(f => f.SortOrder).HasDefaultValue(0);
+        builder.Property(f => f.IsActive).HasDefaultValue(true);
+        builder.Property(f => f.CreatedAt).IsRequired();
         
         // Relationship
         builder.HasOne(f => f.Subcategory)

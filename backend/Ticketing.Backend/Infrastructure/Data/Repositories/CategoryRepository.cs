@@ -55,9 +55,11 @@ public class CategoryRepository : ICategoryRepository
 
     public async Task<IEnumerable<Category>> GetActiveCategoriesAsync()
     {
+        // Include subcategories so GET /api/categories returns non-empty Subcategories (lazy-loading is off)
         return await _context.Categories
-            .Include(c => c.Subcategories)
             .Where(c => c.IsActive)
+            .Include(c => c.Subcategories.Where(sc => sc.IsActive))
+            .OrderBy(c => c.Name)
             .ToListAsync();
     }
 
@@ -91,12 +93,14 @@ public class CategoryRepository : ICategoryRepository
 
     public async Task<bool> ExistsByNameAsync(string name)
     {
-        return await _context.Categories.AnyAsync(c => c.Name == name);
+        var normalized = name.Trim().ToUpperInvariant();
+        return await _context.Categories.AnyAsync(c => c.NormalizedName == normalized);
     }
 
     public async Task<bool> ExistsByNameExcludingIdAsync(string name, int excludeId)
     {
-        return await _context.Categories.AnyAsync(c => c.Name == name && c.Id != excludeId);
+        var normalized = name.Trim().ToUpperInvariant();
+        return await _context.Categories.AnyAsync(c => c.NormalizedName == normalized && c.Id != excludeId);
     }
 
     public async Task<bool> SubcategoryExistsByNameAsync(int categoryId, string name)

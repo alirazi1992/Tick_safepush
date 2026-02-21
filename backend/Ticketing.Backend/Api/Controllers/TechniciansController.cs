@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Ticketing.Backend.Application.DTOs;
@@ -23,25 +24,105 @@ public class TechniciansController : ControllerBase
     /// <summary>
     /// Get all technicians
     /// </summary>
+    /// <param name="page">Page number (optional)</param>
+    /// <param name="pageSize">Page size (optional)</param>
+    /// <param name="search">Search query (optional)</param>
+    /// <param name="includeDeleted">Include soft-deleted technicians (optional, default false)</param>
     [HttpGet]
-    public async Task<IActionResult> GetAllTechnicians()
+    public async Task<IActionResult> GetAllTechnicians(
+        [FromQuery] int? page,
+        [FromQuery] int? pageSize,
+        [FromQuery] string? search,
+        [FromQuery] bool includeDeleted = false)
     {
-        var technicians = await _technicianService.GetAllTechniciansAsync();
-        return Ok(technicians);
+        try
+        {
+            var technicians = await _technicianService.GetAllTechniciansAsync(includeDeleted);
+            var filtered = technicians;
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                var normalized = search.Trim().ToLowerInvariant();
+                filtered = technicians.Where(t =>
+                    t.FullName.ToLowerInvariant().Contains(normalized) ||
+                    t.Email.ToLowerInvariant().Contains(normalized) ||
+                    (!string.IsNullOrWhiteSpace(t.Department) && t.Department.ToLowerInvariant().Contains(normalized)) ||
+                    (!string.IsNullOrWhiteSpace(t.Phone) && t.Phone.ToLowerInvariant().Contains(normalized)));
+            }
+
+            if (page.HasValue && pageSize.HasValue && page > 0 && pageSize > 0)
+            {
+                var totalCount = filtered.Count();
+                var items = filtered
+                    .Skip((page.Value - 1) * pageSize.Value)
+                    .Take(pageSize.Value)
+                    .ToList();
+
+                return Ok(new
+                {
+                    items,
+                    totalCount,
+                    page = page.Value,
+                    pageSize = pageSize.Value
+                });
+            }
+
+            return Ok(filtered);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to get all technicians: {Message}, StackTrace: {StackTrace}", ex.Message, ex.StackTrace);
+            return StatusCode(500, new { message = "Failed to retrieve technicians", error = ex.Message, details = ex.InnerException?.Message });
+        }
+    }
+
+    /// <summary>
+    /// Admin technician directory for assignment picker
+    /// </summary>
+    [HttpGet("directory")]
+    public async Task<IActionResult> GetTechnicianDirectory(
+        [FromQuery] string? search,
+        [FromQuery] string? availability,
+        [FromQuery] int? categoryId,
+        [FromQuery] int? subcategoryId)
+    {
+        try
+        {
+            var technicians = await _technicianService.GetTechnicianDirectoryAsync(search, availability, categoryId, subcategoryId);
+            return Ok(technicians);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to get technician directory");
+            return StatusCode(500, new { message = "Failed to retrieve technician directory", error = ex.Message });
+        }
     }
 
     /// <summary>
     /// Get technician by ID
     /// </summary>
     [HttpGet("{id}")]
-    public async Task<IActionResult> GetTechnician(Guid id)
+    public async Task<IActionResult> GetTechnician([FromRoute] Guid id)
     {
-        var technician = await _technicianService.GetTechnicianByIdAsync(id);
-        if (technician == null)
+        try
         {
-            return NotFound();
+            _logger.LogInformation("GetTechnician: Fetching technician with Id={Id}", id);
+            
+            var technician = await _technicianService.GetTechnicianByIdAsync(id);
+            if (technician == null)
+            {
+                _logger.LogWarning("GetTechnician: Technician with Id={Id} not found", id);
+                return NotFound(new { message = "Technician not found", error = "TECHNICIAN_NOT_FOUND" });
+            }
+            
+            _logger.LogInformation("GetTechnician: Successfully retrieved technician {TechnicianId}", technician.Id);
+            return Ok(technician);
         }
-        return Ok(technician);
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "GetTechnician: Error fetching technician with Id={Id}. Exception: {ExceptionType}, Message: {Message}, StackTrace: {StackTrace}",
+                id, ex.GetType().Name, ex.Message, ex.StackTrace);
+            return StatusCode(500, new { message = "An error occurred while retrieving the technician", error = ex.Message });
+        }
     }
 
     /// <summary>
@@ -60,6 +141,18 @@ public class TechniciansController : ControllerBase
             var technician = await _technicianService.CreateTechnicianAsync(request);
             _logger.LogInformation("Technician created: {TechnicianId}", technician.Id);
             return CreatedAtAction(nameof(GetTechnician), new { id = technician.Id }, technician);
+        }
+        catch (DuplicateEmailException ex)
+        {
+            return Conflict(new { message = ex.Message, error = "EMAIL_EXISTS" });
+        }
+        catch (DuplicatePhoneException ex)
+        {
+            return Conflict(new { message = ex.Message, error = "PHONE_EXISTS" });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { message = ex.Message, error = "VALIDATION_ERROR" });
         }
         catch (Exception ex)
         {
@@ -148,6 +241,118 @@ public class TechniciansController : ControllerBase
             LinkUserResult.AlreadyLinked => Conflict(new { message = "Technician is already linked to a User account", error = "ALREADY_LINKED" }),
             _ => StatusCode(500, new { message = "Unexpected error" })
         };
+    }
+
+    /// <summary>
+    /// Update technician expertise (subcategory permissions)
+    /// </summary>
+    /// <param name="id">Technician ID</param>
+    /// <param name="request">List of subcategory IDs this technician has expertise in</param>
+    /// <returns>Updated technician with subcategoryIds populated</returns>
+    /// <response code="200">Technician expertise updated successfully</response>
+    /// <response code="400">Invalid subcategory IDs</response>
+    /// <response code="404">Technician not found</response>
+    [HttpPut("{id}/expertise")]
+    [ProducesResponseType(typeof(TechnicianResponse), 200)]
+    [ProducesResponseType(400)]
+    [ProducesResponseType(404)]
+    public async Task<IActionResult> UpdateExpertise(Guid id, [FromBody] UpdateTechnicianExpertiseRequest request)
+    {
+        if (request == null)
+        {
+            return BadRequest(new { message = "Request body is required." });
+        }
+        if (request.SubcategoryIds == null)
+        {
+            return BadRequest(new { message = "SubcategoryIds are required." });
+        }
+
+        try
+        {
+            var updated = await _technicianService.UpdateTechnicianExpertiseAsync(id, request.SubcategoryIds);
+            if (updated == null)
+            {
+                return NotFound(new { message = "Technician not found", error = "TECHNICIAN_NOT_FOUND" });
+            }
+
+            return Ok(updated);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Soft delete a technician (Admin only)
+    /// </summary>
+    /// <remarks>
+    /// This performs a soft delete:
+    /// - Sets IsDeleted=true, DeletedAt=UtcNow
+    /// - Sets IsActive=false
+    /// - Locks out the linked user account (prevents login)
+    /// 
+    /// Soft-deleted technicians:
+    /// - Will not appear in technician lists or assignment pickers
+    /// - Will not be auto-assigned to new tickets
+    /// - Historical ticket data remains intact for audit purposes
+    /// </remarks>
+    /// <param name="id">Technician ID to delete</param>
+    /// <returns>Confirmation with deleted technician info</returns>
+    /// <response code="200">Technician soft deleted successfully</response>
+    /// <response code="404">Technician not found</response>
+    /// <response code="500">Failed to delete technician</response>
+    [HttpDelete("{id}")]
+    [ProducesResponseType(200)]
+    [ProducesResponseType(404)]
+    [ProducesResponseType(500)]
+    public async Task<IActionResult> DeleteTechnician(Guid id)
+    {
+        // Get current admin user ID from claims
+        var adminUserIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!Guid.TryParse(adminUserIdStr, out var adminUserId))
+        {
+            return Unauthorized(new { message = "Invalid user ID in token", error = "INVALID_USER_ID" });
+        }
+
+        try
+        {
+            var (result, technician) = await _technicianService.SoftDeleteTechnicianAsync(id, adminUserId);
+
+            return result switch
+            {
+                SoftDeleteResult.Success => Ok(new 
+                { 
+                    message = "Technician deleted successfully",
+                    technicianId = id,
+                    isDeleted = true,
+                    technician
+                }),
+                SoftDeleteResult.AlreadyDeleted => Ok(new 
+                { 
+                    message = "Technician was already deleted",
+                    technicianId = id,
+                    isDeleted = true,
+                    technician
+                }),
+                SoftDeleteResult.TechnicianNotFound => NotFound(new 
+                { 
+                    message = "Technician not found", 
+                    error = "TECHNICIAN_NOT_FOUND" 
+                }),
+                SoftDeleteResult.Failed => StatusCode(500, new 
+                { 
+                    message = "Failed to delete technician", 
+                    error = "DELETE_FAILED" 
+                }),
+                _ => StatusCode(500, new { message = "Unexpected error" })
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "DeleteTechnician: Error deleting technician {TechnicianId}", id);
+            return StatusCode(500, new { message = "Failed to delete technician", error = ex.Message });
+        }
     }
 }
 

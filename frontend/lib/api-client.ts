@@ -1,6 +1,206 @@
 // lib/api-client.ts
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/+$/, "") || "http://localhost:5000";
+// Robust API client with automatic port detection (5000/5001 fallback)
+// Uses direct calls to backend (Option A) - set NEXT_PUBLIC_API_BASE_URL to customize
+
+import { normalizeBaseUrl, joinApi, getEffectiveApiBaseUrl, getDefaultApiBaseUrl } from "./url";
+
+// Session cache for successful API base URL
+const API_BASE_URL_CACHE_KEY = "ticketing.api.baseUrl";
+const API_BASE_URL_DETECTION_KEY = "ticketing.api.detectionInProgress";
+
+// Use direct calls by default (Option A)
+// Set NEXT_PUBLIC_API_BASE_URL to use a specific backend URL
+// If not set, defaults to http://localhost:5000
+const USE_PROXY = false; // Always use direct calls (Option A)
+
+// Get cached API base URL or null
+function getCachedApiBaseUrl(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return localStorage.getItem(API_BASE_URL_CACHE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+// Cache successful API base URL
+function cacheApiBaseUrl(url: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(API_BASE_URL_CACHE_KEY, url);
+  } catch {
+    // Ignore localStorage errors
+  }
+}
+
+// Clear cached API base URL (exported for manual cache clearing)
+export function clearApiBaseUrlCache(): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.removeItem(API_BASE_URL_CACHE_KEY);
+    sessionStorage.removeItem(API_BASE_URL_DETECTION_KEY);
+    // Reset the module-level cache
+    API_BASE_URL = null;
+    apiBaseUrlPromise = null;
+  } catch {
+    // Ignore localStorage errors
+  }
+}
+
+// Check if detection is in progress to prevent infinite loops
+function isDetectionInProgress(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return sessionStorage.getItem(API_BASE_URL_DETECTION_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function setDetectionInProgress(value: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (value) {
+      sessionStorage.setItem(API_BASE_URL_DETECTION_KEY, "true");
+    } else {
+      sessionStorage.removeItem(API_BASE_URL_DETECTION_KEY);
+    }
+  } catch {
+    // Ignore sessionStorage errors
+  }
+}
+
+// Test if a URL is reachable
+async function testApiUrl(baseUrl: string, timeout = 2000): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    
+    // Use joinApi to ensure correct URL construction
+    const healthUrl = joinApi(normalizeBaseUrl(baseUrl), "/api/health");
+    
+    const response = await fetch(healthUrl, {
+      method: "GET",
+      signal: controller.signal,
+      cache: "no-store",
+      mode: "cors", // Explicitly set CORS mode
+    });
+    
+    clearTimeout(timeoutId);
+    return response.ok;
+  } catch (error) {
+    // Log the error for debugging
+    console.warn(`[api-client] Failed to test API URL ${baseUrl}:`, error);
+    return false;
+  }
+}
+
+// Generate candidate URLs in priority order (dev default only in development)
+function getBackendUrlCandidates(): string[] {
+  const envUrl = normalizeBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL);
+  const defaultUrl = getDefaultApiBaseUrl();
+  const candidates = envUrl ? [envUrl] : (defaultUrl ? [defaultUrl] : []);
+  return Array.from(new Set(candidates));
+}
+
+// Detect the correct API base URL
+async function detectApiBaseUrl(): Promise<string> {
+  const envUrl = normalizeBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL);
+  if (envUrl) {
+    return envUrl;
+  }
+
+  if (isDetectionInProgress()) {
+    return getDefaultApiBaseUrl() || "";
+  }
+
+  setDetectionInProgress(true);
+
+  try {
+    const cachedUrl = getCachedApiBaseUrl();
+    if (cachedUrl) {
+      return cachedUrl;
+    }
+
+    const candidates = getBackendUrlCandidates();
+    const selected = candidates[0] || getDefaultApiBaseUrl() || "";
+    cacheApiBaseUrl(selected);
+    return selected;
+  } finally {
+    setDetectionInProgress(false);
+  }
+}
+
+// Initialize API base URL (detected once per session)
+let API_BASE_URL: string | null = null;
+let apiBaseUrlPromise: Promise<string> | null = null;
+const apiLogDedup = new Map<string, number>();
+const API_LOG_DEDUP_WINDOW_MS = 10_000;
+const healthCheckDedup = new Map<string, number>();
+const HEALTH_CHECK_DEDUP_WINDOW_MS = 10_000;
+
+function shouldLogDedup(key: string): boolean {
+  const now = Date.now();
+  const last = apiLogDedup.get(key);
+  if (last && now - last < API_LOG_DEDUP_WINDOW_MS) {
+    return false;
+  }
+  apiLogDedup.set(key, now);
+  return true;
+}
+
+function shouldPingHealth(key: string): boolean {
+  const now = Date.now();
+  const last = healthCheckDedup.get(key);
+  if (last && now - last < HEALTH_CHECK_DEDUP_WINDOW_MS) {
+    return false;
+  }
+  healthCheckDedup.set(key, now);
+  return true;
+}
+
+export async function getApiBaseUrl(): Promise<string> {
+  // Production must be env-driven. Auto-detect is dev-only.
+  const envBase = normalizeBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL);
+  if (envBase) {
+    if (!API_BASE_URL) API_BASE_URL = envBase;
+    return envBase;
+  }
+
+  // Always use direct calls (Option A) - MUST return absolute URL
+  // Return cached value if available
+  if (API_BASE_URL) {
+    return API_BASE_URL;
+  }
+
+  // If detection is in progress, wait for it
+  if (apiBaseUrlPromise) {
+    return apiBaseUrlPromise;
+  }
+
+  // Start detection
+  apiBaseUrlPromise = detectApiBaseUrl();
+  API_BASE_URL = await apiBaseUrlPromise;
+  apiBaseUrlPromise = null;
+
+  const fallback = getDefaultApiBaseUrl();
+  if (!API_BASE_URL || (!API_BASE_URL.startsWith("http://") && !API_BASE_URL.startsWith("https://"))) {
+    if (fallback) {
+      console.warn("[api-client] Invalid URL, using dev default:", fallback);
+      API_BASE_URL = fallback;
+    } else {
+      console.error("[api-client] No valid API base URL. Production must set NEXT_PUBLIC_API_BASE_URL.");
+    }
+  }
+
+  if (typeof window !== "undefined" && process.env.NODE_ENV === "development") {
+    console.log("[api-client] Resolved API Base URL:", API_BASE_URL);
+    console.log("[api-client] NEXT_PUBLIC_API_BASE_URL:", process.env.NEXT_PUBLIC_API_BASE_URL || "(not set, using dev default)");
+    console.log("[api-client] Using direct calls (Option A)");
+  }
+
+  return API_BASE_URL;
+}
 
 interface ApiRequestOptions {
   method?: string;
@@ -9,29 +209,206 @@ interface ApiRequestOptions {
   silent?: boolean; // If true, suppress console.error on non-2xx responses (still throws error)
 }
 
+function isAbsoluteUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
+function assertNoApiHttp(url: string): void {
+  if (!url.includes("/api/http://") && !url.includes("/api/https://")) {
+    return;
+  }
+  const error = new Error(`[api-client] FORBIDDEN: URL contains "/api/http". URL: ${url}`);
+  if (process.env.NODE_ENV === "development") {
+    console.error(error);
+    throw error;
+  }
+  console.warn(error.message);
+}
+
+function normalizeRequestPath(path: string): string {
+  if (!isAbsoluteUrl(path)) {
+    return path;
+  }
+  try {
+    const parsed = new URL(path);
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return path;
+  }
+}
+
+async function pingApiHealth(baseUrl: string): Promise<{ ok: boolean; status?: number; error?: string; url: string }> {
+  try {
+    const normalizedBase = normalizeBaseUrl(baseUrl);
+    const healthUrl = joinApi(normalizedBase, "/api/health");
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 1500);
+    const res = await fetch(healthUrl, {
+      method: "GET",
+      signal: controller.signal,
+      cache: "no-store",
+      mode: "cors",
+    });
+    clearTimeout(timeoutId);
+    return { ok: res.ok, status: res.status, url: healthUrl };
+  } catch (err: any) {
+    const normalizedBase = normalizeBaseUrl(baseUrl);
+    const healthUrl = joinApi(normalizedBase, "/api/health");
+    return {
+      ok: false,
+      error: err?.message || err?.name || "health-check-failed",
+      url: healthUrl,
+    };
+  }
+}
+
+export async function checkApiHealth(): Promise<{ ok: boolean; status?: number; error?: string; url: string }> {
+  const baseUrl = await getApiBaseUrl();
+  return pingApiHealth(baseUrl);
+}
+
+// Custom error class for API errors
+export class ApiError extends Error {
+  /** True when status is 403 (permission denied); use for user-friendly toast, not "server crashed". */
+  isForbidden?: boolean;
+  /** True when status >= 500 (server error). */
+  isServerError?: boolean;
+  constructor(
+    message: string,
+    public method: string,
+    public url: string,
+    public status: number,
+    public statusText: string,
+    public contentType: string,
+    public body: unknown,
+    public rawText: string | null,
+    public requestPath: string
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+// Error deduplication map: key -> last logged timestamp
+const errorLogDedup = new Map<string, number>();
+const ERROR_LOG_DEDUP_WINDOW_MS = 5000; // 5 seconds
+
+function shouldLogError(method: string, url: string, status: number): boolean {
+  const key = `${method}:${url}:${status}`;
+  const now = Date.now();
+  const last = errorLogDedup.get(key);
+  if (last && now - last < ERROR_LOG_DEDUP_WINDOW_MS) {
+    return false;
+  }
+  errorLogDedup.set(key, now);
+  return true;
+}
+
 export async function apiRequest<TResponse>(
   path: string,
   options: ApiRequestOptions = {}
 ): Promise<TResponse> {
   const { method = "GET", token, body, silent = false } = options;
 
-  const url = `${API_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
+  // Get the resolved API base URL (with automatic detection)
+  const baseUrl = await getApiBaseUrl();
+  
+  let url: string;
+  let requestPath: string;
+  let effectiveBase = "";
 
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
+  if (isAbsoluteUrl(path) && process.env.NODE_ENV === "development") {
+    const logKey = `absolute:${method}:${path}`;
+    if (shouldLogDedup(logKey)) {
+      console.error(`[api-client] FORBIDDEN: apiRequest only accepts relative paths. Got: ${path}`);
+    }
+  }
+
+  const normalizedInputPath = normalizeRequestPath(path);
+  const isAbsoluteInput = isAbsoluteUrl(normalizedInputPath);
+
+  if (isAbsoluteInput) {
+    const error = new Error(`[api-client] FORBIDDEN: apiRequest only accepts relative paths. Got: ${normalizedInputPath}`);
+    if (process.env.NODE_ENV === "development") {
+      throw error;
+    }
+    throw error;
+  }
+
+  // Ensure path starts with /api/
+  let apiPath = normalizedInputPath.startsWith("/") ? normalizedInputPath : `/${normalizedInputPath}`;
+  if (!apiPath.startsWith("/api/")) {
+    // If path doesn't start with /api/, add it
+    const cleanPath = apiPath.startsWith("/") ? apiPath.slice(1) : apiPath;
+    apiPath = `/api/${cleanPath}`;
+  }
+
+  // Always use direct connection (Option A) - MUST use absolute URL
+  const normalizedBase = normalizeBaseUrl(baseUrl);
+
+  // GUARD: Prevent relative URLs and /bapi usage
+  if (apiPath.startsWith("/bapi")) {
+    const error = new Error(`[api-client] FORBIDDEN: Request path starts with "/bapi". This is not allowed. Path: ${apiPath}. Call stack: ${new Error().stack}`);
+    console.error(error);
+    if (process.env.NODE_ENV === "development") {
+      throw error;
+    }
+  }
+
+  // GUARD: Ensure base URL is absolute
+  effectiveBase = normalizedBase;
+  if (!effectiveBase || (!effectiveBase.startsWith("http://") && !effectiveBase.startsWith("https://"))) {
+    const error = new Error(`[api-client] FORBIDDEN: API base URL is not absolute. Base: "${effectiveBase}", Path: ${apiPath}. This will cause relative URL requests. Call stack: ${new Error().stack}`);
+    console.error(error);
+    if (process.env.NODE_ENV === "development") {
+      throw error;
+    }
+    // Fallback to default in production
+    effectiveBase = "http://localhost:5000";
+    console.warn(`[api-client] Using fallback base URL: ${effectiveBase}`);
+  }
+
+  url = joinApi(effectiveBase, apiPath);
+  requestPath = apiPath; // For logging
+
+  assertNoApiHttp(url);
+  
+  // GUARD: Final check - URL must be absolute
+  if (!url.startsWith("http://") && !url.startsWith("https://")) {
+    const error = new Error(`[api-client] FORBIDDEN: Final URL is not absolute. URL: "${url}", Base: "${effectiveBase}", Path: ${requestPath}. Call stack: ${new Error().stack}`);
+    console.error(error);
+    if (process.env.NODE_ENV === "development") {
+      throw error;
+    }
+  }
+
+  const headers: Record<string, string> = {};
+
+  // Only set Content-Type for JSON, not for FormData
+  const isFormData = body instanceof FormData;
+  if (!isFormData) {
+    headers["Content-Type"] = "application/json";
+  }
 
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
 
   // Log the full resolved URL for debugging (this is critical for finding 404 issues)
-  console.log(`[apiRequest] ${method} ${url}`, {
-    baseUrl: API_BASE_URL,
-    path: path,
-    hasToken: !!token,
-    body: body ? JSON.stringify(body).substring(0, 100) : undefined,
-  });
+  if (process.env.NODE_ENV === "development") {
+    console.log(`[apiRequest] ${method} ${url}`, {
+      baseUrl: baseUrl || "(proxy)",
+      path: requestPath,
+      hasToken: !!token,
+      isFormData,
+      body: isFormData ? "[FormData]" : (body ? JSON.stringify(body).substring(0, 100) : undefined),
+    });
+    
+    // Store last request URL for debug widget
+    if (typeof window !== "undefined") {
+      (window as any).__lastApiRequestUrl = url;
+    }
+  }
 
   // Add timeout to prevent hanging requests
   const controller = new AbortController();
@@ -42,51 +419,133 @@ export async function apiRequest<TResponse>(
     res = await fetch(url, {
       method,
       headers,
-      body: body ? JSON.stringify(body) : undefined,
+      body: isFormData ? body : (body ? JSON.stringify(body) : undefined),
       signal: controller.signal,
+      cache: "no-store", // Always fetch fresh data (important for dynamic fields)
+      credentials: "include", // Include cookies for CORS requests (backend allows credentials)
     });
     clearTimeout(timeoutId);
   } catch (error: any) {
     clearTimeout(timeoutId);
-    if (error.name === "AbortError") {
-      throw new Error("Request timeout: Backend server may not be responding");
+    
+    // If using proxy, the proxy handles fallback automatically
+    // Only retry with direct connection if not using proxy
+    if (
+      !USE_PROXY &&
+      (error.name === "AbortError" || 
+       error.message?.includes("Failed to fetch") || 
+       error.message?.includes("NetworkError") || 
+       error.name === "TypeError") &&
+      baseUrl === "http://localhost:5000" &&
+      !isDetectionInProgress()
+    ) {
+      console.warn(`[api-client] Request to ${baseUrl} failed, trying fallback port 5001...`);
+      
+      // Clear cache and retry with port 5001
+      API_BASE_URL = null;
+      clearApiBaseUrlCache();
+      
+      // Retry once with detected URL
+      const fallbackUrl = await getApiBaseUrl();
+      if (fallbackUrl !== baseUrl) {
+        console.log(`[api-client] Retrying request with ${fallbackUrl}`);
+        return apiRequest<TResponse>(path, options);
+      }
     }
+    
+    if (error.name === "AbortError") {
+      const networkError = new Error("Request timeout: Backend server may not be responding. Please check if the backend is running on " + baseUrl);
+      (networkError as any).isNetworkError = true;
+      (networkError as any).isTimeout = true;
+      (networkError as any).status = 0;
+      (networkError as any).code = "REQUEST_TIMEOUT";
+      (networkError as any).requestPath = requestPath;
+      (networkError as any).resolvedUrl = url;
+      throw networkError;
+    }
+    // Network errors (Failed to fetch, CORS, etc.)
+    // Only treat as network error if it's actually a connection issue, not an HTTP error response
+    const isActualNetworkError = 
+      (error.message?.includes("Failed to fetch") || 
+       error.message?.includes("NetworkError") || 
+       error.name === "TypeError") &&
+      !error.status; // If we have a status code, it's an HTTP error, not a network error
+    
+    if (isActualNetworkError) {
+      // Get tried URLs for diagnostics
+      const candidates = getBackendUrlCandidates();
+      const triedUrls = candidates.slice(0, Math.min(6, candidates.length)); // Show first 6 candidates
+      const networkError = new Error(
+        "Cannot connect to backend server. Please ensure the backend is running. Start with: .\\tools\\run-backend.ps1"
+      );
+      (networkError as any).isNetworkError = true;
+      (networkError as any).status = 0;
+      (networkError as any).code = "BACKEND_UNREACHABLE";
+      (networkError as any).originalError = error;
+      (networkError as any).triedUrls = triedUrls;
+      (networkError as any).lastAttemptedUrl = url;
+      (networkError as any).requestPath = requestPath;
+      (networkError as any).resolvedUrl = url;
+      // Log detailed diagnostics once per endpoint per window
+      if (process.env.NODE_ENV === "development") {
+        const logKey = `${method}:${requestPath}`;
+        if (shouldLogDedup(logKey)) {
+          console.error(`[api-client] Connection failed. Last attempted URL: ${url}`);
+          console.error(`[api-client] Tried URLs: ${triedUrls.join(", ")}`);
+          console.error(`[api-client] Error: ${error.message || error.name}`);
+        }
+      }
+      
+      throw networkError;
+    }
+    
+    // For other errors (including HTTP errors with status codes), re-throw as-is
     throw error;
   }
 
   // Log response status immediately
   console.log(`[apiRequest] ${method} ${url} → ${res.status} ${res.statusText}`);
+  
+  // Store last error for debug widget (dev only)
+  if (!res.ok && typeof window !== "undefined" && process.env.NODE_ENV === "development") {
+    (window as any).__lastApiError = {
+      url,
+      status: res.status,
+      statusText: res.statusText,
+    };
+  }
 
   if (!res.ok) {
     let errorBody: unknown = null;
     let errorMessage = `API request failed with status ${res.status}`;
     let responseText: string | null = null;
+    const contentType = res.headers.get("content-type") || "";
     
     try {
       // Clone the response to read body (response can only be read once)
       const clonedRes = res.clone();
       // Try to read as text first to capture everything
       responseText = await clonedRes.text();
-      console.log(`[apiRequest] Response text (${res.status}):`, responseText ? responseText.substring(0, 500) : "(empty)");
       
       // Try to parse as JSON
       if (responseText && responseText.trim()) {
         try {
           errorBody = JSON.parse(responseText);
-          console.log(`[apiRequest] Parsed error body:`, JSON.stringify(errorBody, null, 2));
         } catch (parseErr) {
           // Not JSON, use text as message
-          console.log(`[apiRequest] Response is not JSON, using as text:`, responseText.substring(0, 200));
           errorMessage = responseText;
           // Store the text as the body for debugging
           errorBody = { rawText: responseText };
         }
       } else {
-        console.warn(`[apiRequest] Empty response body for status ${res.status}`);
         errorBody = { empty: true };
       }
       
-      // Extract error message from JSON body
+      if (errorBody && typeof errorBody === "object" && responseText) {
+        (errorBody as Record<string, unknown>).rawText = responseText;
+      }
+
+      // Extract error message from JSON body (RFC 7807 ProblemDetails preferred for 403/4xx/5xx)
       if (errorBody && typeof errorBody === "object") {
         const body = errorBody as Record<string, unknown>;
         if (body.errors && typeof body.errors === "object") {
@@ -96,47 +555,86 @@ export async function apiRequest<TResponse>(
           if (Array.isArray(firstError) && firstError.length > 0) {
             errorMessage = String(firstError[0]);
           }
-        } else if (body.detail && typeof body.detail === "string") { // Prioritize ProblemDetails 'detail'
+        } else if (body.detail && typeof body.detail === "string") {
+          // ProblemDetails.detail (primary for 403 Forbidden messages)
           errorMessage = body.detail;
-        } else if (body.title && typeof body.title === "string") { // Fallback to ProblemDetails 'title'
+        } else if (body.title && typeof body.title === "string") {
           errorMessage = body.title;
-        } else if (body.message && typeof body.message === "string") { // Generic message
+        } else if (body.message && typeof body.message === "string") {
           errorMessage = body.message;
         }
       }
     } catch (parseError) {
-      // If all parsing fails, log the error
-      console.error(`[apiRequest] Failed to parse error response:`, parseError);
+      // If all parsing fails, use responseText if available
       if (responseText) {
         errorMessage = responseText;
       }
     }
     
-    // Handle 401 Unauthorized - clear invalid token and redirect to login
-    if (res.status === 401 && token && typeof window !== "undefined") {
-      console.warn("[apiRequest] 401 Unauthorized - clearing invalid token and redirecting to login");
-      // Clear auth data from localStorage
+    // Handle 401 Unauthorized - clear session and redirect to login (cookie or token auth)
+    if (res.status === 401 && typeof window !== "undefined") {
       localStorage.removeItem("ticketing.auth.token");
       localStorage.removeItem("ticketing.auth.user");
       localStorage.removeItem("userEmail");
       localStorage.removeItem("userName");
-      // Redirect to login page
-      window.location.href = "/login";
+      const pathname = window.location.pathname ?? "";
+      if (!pathname.startsWith("/login")) {
+        const errCode = (errorBody && typeof errorBody === "object")
+          ? ((errorBody as Record<string, unknown>).error ?? (errorBody as Record<string, unknown>).authError)
+          : undefined;
+        const query = errCode === "missing_role" ? "?error=missing_role" : "";
+        console.warn("[apiRequest] 401 Unauthorized - redirecting to login" + (query ? " " + query : ""));
+        window.location.href = "/login" + query;
+      }
     }
-    
-    // Only log error if not silent (silent mode suppresses error spam for expected 404s)
+
+    // 403 = permission denied (expected), not a server crash — log as warning; preserve first ~200 chars for debugging
+    const isForbidden = res.status === 403;
+    const isServerError = res.status >= 500;
     if (!silent) {
-      console.error(`[apiRequest] ERROR ${method} ${url}:`, {
+      const logSnippet = responseText ? responseText.substring(0, 200) : "(empty)";
+      const errorInfo = {
         status: res.status,
         statusText: res.statusText,
-        body: errorBody,
+        url: url,
+        method: method,
         message: errorMessage,
-      });
+        responseSnippet: logSnippet,
+      };
+      if (isForbidden) {
+        if (process.env.NODE_ENV === "development" && shouldLogError(method, url, res.status)) {
+          console.warn(`[apiRequest] 403 Forbidden (permission denied) ${method} ${url}`, errorInfo);
+        }
+      } else if (isServerError) {
+        console.error(`[apiRequest] Server error ${res.status} ${method} ${url}`, errorInfo);
+        console.error(`  Response: ${logSnippet}`);
+      } else {
+        console.warn(`[apiRequest] ${res.status} ${method} ${url}`, errorInfo);
+      }
     }
-    const error = new Error(errorMessage);
-    (error as any).status = res.status;
-    (error as any).body = errorBody;
-    throw error;
+
+    // Create typed error
+    const apiError = new ApiError(
+      errorMessage,
+      method,
+      url,
+      res.status,
+      res.statusText,
+      contentType,
+      errorBody,
+      responseText,
+      requestPath
+    );
+
+    apiError.isForbidden = isForbidden;
+    apiError.isServerError = isServerError;
+
+    if (errorBody && typeof errorBody === "object") {
+      const body = errorBody as Record<string, unknown>;
+      (apiError as any).traceId = body.traceId || body.traceID || (body as any).TraceId;
+    }
+
+    throw apiError;
   }
 
   if (res.status === 204) {

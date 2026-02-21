@@ -1,8 +1,10 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
+import Image from "next/image"
+import { useRouter, useSearchParams } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
+import { getLandingPathFromSession } from "@/lib/auth-routing"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -10,6 +12,7 @@ import { Eye, EyeOff, LogIn } from "lucide-react"
 
 export default function LoginPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const { user, login, isLoading } = useAuth()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -18,8 +21,13 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    const e = searchParams.get("error")
+    if (e === "missing_role") setError("No valid role or landing path assigned. Please contact your administrator.")
+  }, [searchParams])
+
+  useEffect(() => {
     if (user) {
-      router.replace("/")
+      router.replace(getLandingPathFromSession({ user }))
     }
   }, [user, router])
 
@@ -28,17 +36,26 @@ export default function LoginPage() {
     setSubmitting(true)
     setError(null)
     try {
-      const ok = await login(email.trim(), password)
-      if (ok) {
-        router.replace("/")
-      } else {
-        setError("Invalid username or password. Please check your credentials and ensure the backend server is running.")
-      }
+      const landingPath = await login(email.trim(), password)
+      router.replace(landingPath)
     } catch (err: any) {
       console.error("Login error:", err)
-      const errorMessage = err?.message?.includes("fetch") || err?.message?.includes("Failed to fetch")
-        ? "Cannot connect to the server. Please ensure the backend is running on http://localhost:5000"
-        : "Something went wrong. Please try again."
+      // Extract error message from the error object
+      let errorMessage = err?.message || "Something went wrong. Please try again."
+      
+      // Check for network errors
+      if (err?.message?.includes("fetch") || err?.message?.includes("Failed to fetch") || err?.message?.includes("Cannot connect")) {
+        errorMessage = "Cannot connect to the server. Please ensure the backend is running on http://localhost:5000"
+      }
+      // 401 or auth-related messages: show friendly text (backend may return "No token", "Authentication required.", etc.)
+      else if (err?.status === 401 || /no token|authentication required|unauthorized/i.test(errorMessage)) {
+        errorMessage = "Invalid email or password. Please check your credentials."
+      }
+      // Check for timeout
+      else if (err?.message?.includes("timeout") || err?.isTimeout) {
+        errorMessage = "Request timeout. The server may be slow or not responding. Please try again."
+      }
+      
       setError(errorMessage)
     } finally {
       setSubmitting(false)
@@ -46,7 +63,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex bg-background text-foreground relative">
+    <div className="min-h-screen flex bg-background text-foreground relative overflow-x-hidden">
       {/* Full-page Container Ship Background */}
       <div className="absolute inset-0 z-0">
         <div
@@ -63,10 +80,17 @@ export default function LoginPage() {
       {/* Login form - centered on background */}
       <div className="relative z-10 flex-1 flex items-center justify-center p-6">
         <div className="w-full max-w-md">
-          <div className="text-center mb-8">
+          <div className="text-center mb-8 flex items-center justify-center gap-3">
             <h1 className="text-4xl font-extrabold tracking-tight drop-shadow md:text-5xl">
-              AsiaApp
+              AsiaTik
             </h1>
+            <Image
+              src="/checkmark.png"
+              alt=""
+              width={40}
+              height={40}
+              className="h-8 w-8 md:h-10 md:w-10 shrink-0"
+            />
           </div>
 
           <form onSubmit={onSubmit} className="space-y-5">
@@ -137,9 +161,9 @@ export default function LoginPage() {
 
             {/* Demo credentials for local testing */}
             <div className="text-xs text-muted-foreground mt-2 space-y-1">
-              <p>Client: client1@test.com / Client123!</p>
-              <p>Technician: tech1@test.com / Tech123!</p>
-              <p>Admin: admin@test.com / Admin123!</p>
+              <p>Client: client1@test.com / Test123!</p>
+              <p>Technician: tech1@test.com / Test123!</p>
+              <p>Admin: admin@test.com / Test123!</p>
             </div>
           </form>
         </div>

@@ -18,14 +18,32 @@ public class SettingsController : ControllerBase
     }
 
     /// <summary>
-    /// Get current system settings
+    /// Get current system settings (read-only access for all authenticated users)
     /// </summary>
     [HttpGet("system")]
-    [Authorize(Roles = nameof(UserRole.Admin))]
+    [Authorize] // Allow all authenticated roles to read settings
     public async Task<ActionResult<SystemSettingsResponse>> GetSystemSettings()
     {
-        var settings = await _systemSettingsService.GetSystemSettingsAsync();
-        return Ok(settings);
+        try
+        {
+            var settings = await _systemSettingsService.GetSystemSettingsAsync();
+            return Ok(settings);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "An error occurred while retrieving system settings", error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Get current system settings (backward compatibility route)
+    /// </summary>
+    [HttpGet("systems")]
+    [Authorize] // Allow all authenticated roles to read settings
+    public async Task<ActionResult<SystemSettingsResponse>> GetSystemSettingsPlural()
+    {
+        // Redirect to the canonical route
+        return await GetSystemSettings();
     }
 
     /// <summary>

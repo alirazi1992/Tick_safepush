@@ -56,7 +56,7 @@
     "strings": false
   },
 
-  // Cursor-specific optimizations
+  // Editor indexing
   "cursor.general.enableIndexing": true,
 
   // Additional performance settings

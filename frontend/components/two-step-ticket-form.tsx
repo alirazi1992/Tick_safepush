@@ -105,6 +105,19 @@ export function TwoStepTicketForm({ onClose, onSubmit, categoriesData }: TwoStep
     const isValid = await trigger()
     if (isValid) {
       setCurrentStep(2)
+    } else {
+      // Show validation errors for step 1
+      const step1Errors = Object.entries(errors).filter(([key]) => 
+        ['priority', 'mainIssue', 'subIssue'].includes(key)
+      )
+      if (step1Errors.length > 0) {
+        const firstError = step1Errors[0][1] as any
+        toast({
+          title: "خطا در اعتبارسنجی",
+          description: firstError?.message || "لطفاً تمام فیلدهای الزامی را پر کنید",
+          variant: "destructive",
+        })
+      }
     }
   }
 
@@ -113,7 +126,16 @@ export function TwoStepTicketForm({ onClose, onSubmit, categoriesData }: TwoStep
   }
 
   const handleFormSubmit = async (data: any) => {
-    if (isSaving) return
+    if (process.env.NODE_ENV === "development") {
+      console.log("[TwoStepTicketForm] handleFormSubmit called", { mainIssue: data.mainIssue, subIssue: data.subIssue, isSaving })
+    }
+    
+    if (isSaving) {
+      if (process.env.NODE_ENV === "development") {
+        console.log("[TwoStepTicketForm] Already saving, returning early")
+      }
+      return
+    }
 
     const selectedCategory = categoriesData?.[data.mainIssue]
     const selectedSubcategory =
@@ -121,21 +143,61 @@ export function TwoStepTicketForm({ onClose, onSubmit, categoriesData }: TwoStep
         ? categoriesData?.[data.mainIssue]?.subIssues?.[data.subIssue]
         : null
 
-    if (!selectedCategory?.backendId) {
+    if (process.env.NODE_ENV === "development") {
+      console.log("[TwoStepTicketForm] Category check", {
+        mainIssue: data.mainIssue,
+        categoryExists: !!selectedCategory,
+        backendId: selectedCategory?.backendId,
+        subIssue: data.subIssue,
+        subcategoryExists: !!selectedSubcategory,
+        subcategoryBackendId: selectedSubcategory?.backendId
+      })
+    }
+
+    // Don't block here - let parent handler (handleTicketCreate) handle category loading
+    // It has ensureBackendCategories() logic. If backendId is still missing after that,
+    // the parent will show an error and return early, preventing modal close.
+    if (!selectedCategory) {
+      if (process.env.NODE_ENV === "development") {
+        console.warn("[TwoStepTicketForm] Category not found in categoriesData", {
+          mainIssue: data.mainIssue,
+          allCategories: Object.keys(categoriesData || {})
+        })
+      }
       toast({
-        title: "دسته‌بندی آماده نیست",
-        description: "دسته‌بندی‌ها هنوز از سرور دریافت نشده‌اند. چند لحظه بعد دوباره تلاش کنید.",
+        title: "دسته‌بندی یافت نشد",
+        description: "لطفاً دسته‌بندی را دوباره انتخاب کنید.",
         variant: "destructive",
       })
-      return
+      throw new Error(`Category "${data.mainIssue}" not found in categoriesData`) // Throw to prevent modal close
     }
 
     try {
       setIsSaving(true)
 
-      const dynEntries = Object.entries(data)
-        .filter(([k, v]) => k.startsWith("dyn_") && v !== undefined && v !== "")
-        .map(([k, v]) => [k.replace(/^dyn_/, ""), v])
+      // Collect dynamic field values in backend format: { fieldDefinitionId, value }
+      const dynamicFields: Array<{ fieldDefinitionId: number; value: string }> = []
+      
+      // Extract dyn_* fields (format: dyn_{fieldDefinitionId})
+      Object.entries(data).forEach(([key, value]) => {
+        if (key.startsWith("dyn_") && value !== undefined && value !== "") {
+          const fieldDefinitionId = parseInt(key.replace(/^dyn_/, ""), 10)
+          if (!isNaN(fieldDefinitionId)) {
+            // Handle MultiSelect: convert array to comma-separated string (backend expects string)
+            let fieldValue: string
+            if (Array.isArray(value)) {
+              fieldValue = value.join(",")
+            } else {
+              fieldValue = String(value)
+            }
+            
+            dynamicFields.push({
+              fieldDefinitionId,
+              value: fieldValue,
+            })
+          }
+        }
+      })
 
       const ticketData = {
         title: data.title,
@@ -149,49 +211,39 @@ export function TwoStepTicketForm({ onClose, onSubmit, categoriesData }: TwoStep
         clientPhone: user?.phone || "",
         createdAt: new Date().toISOString(),
         attachments: attachedFiles,
-        dynamicFields: {
-          ...Object.fromEntries(dynEntries),
-          ...Object.fromEntries(
-            Object.entries(data).filter(
-              ([key, value]) =>
-                value &&
-                !key.startsWith("dyn_") &&
-                ![
-                  "title",
-                  "description",
-                  "priority",
-                  "mainIssue",
-                  "subIssue",
-                  "clientName",
-                  "clientEmail",
-                  "clientPhone",
-                ].includes(key),
-            ),
-          ),
-        },
+        dynamicFields: dynamicFields.length > 0 ? dynamicFields : undefined,
       }
 
-      if (data.subIssue && !selectedSubcategory?.backendId) {
-        ticketData.dynamicFields = {
-          ...ticketData.dynamicFields,
-          localSubIssue: selectedSubcategory?.label ?? data.subIssue,
-        }
+      if (process.env.NODE_ENV === "development") {
+        console.log("[TwoStepTicketForm] VALIDATION PASSED - Calling onSubmit", {
+          title: ticketData.title,
+          category: ticketData.category,
+          subcategory: ticketData.subcategory,
+          priority: ticketData.priority,
+          categoryBackendId: selectedCategory?.backendId,
+          subcategoryBackendId: selectedSubcategory?.backendId,
+          hasAttachments: ticketData.attachments?.length > 0,
+          dynamicFieldsCount: ticketData.dynamicFields?.length || 0,
+          fullTicketData: JSON.stringify(ticketData, null, 2)
+        })
       }
 
       await onSubmit(ticketData)
 
-      toast({
-        title: "تیکت با موفقیت ثبت شد",
-        description: "در حال بروزرسانی فهرست تیکت‌ها...",
-      })
+      if (process.env.NODE_ENV === "development") {
+        console.log("[TwoStepTicketForm] onSubmit succeeded, closing modal")
+      }
 
+      // Success toast is handled by parent component
+      // Only close modal if onSubmit succeeded (no exception thrown)
       onClose()
     } catch (error) {
-      toast({
-        title: "خطا در ثبت تیکت",
-        description: "لطفاً دوباره تلاش کنید.",
-        variant: "destructive",
-      })
+      if (process.env.NODE_ENV === "development") {
+        console.error("[TwoStepTicketForm] onSubmit failed, NOT closing modal", error)
+      }
+      // Error toast is handled by parent component (handleTicketCreate)
+      // Don't re-throw - we've handled it, just prevent modal close
+      // The error was already logged and shown to user via toast in handleTicketCreate
     } finally {
       setIsSaving(false)
     }
@@ -313,7 +365,28 @@ export function TwoStepTicketForm({ onClose, onSubmit, categoriesData }: TwoStep
         </div>
       </div>
 
-      <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-6">
+      <form onSubmit={handleSubmit(handleFormSubmit, (validationErrors) => {
+        if (process.env.NODE_ENV === "development") {
+          console.warn("[TwoStepTicketForm] Form validation failed", validationErrors)
+        }
+        
+        // Show user-friendly error message
+        const firstError = Object.values(validationErrors)[0] as any
+        const firstErrorField = Object.keys(validationErrors)[0]
+        const errorMessage = firstError?.message || "لطفاً تمام فیلدهای الزامی را پر کنید"
+        
+        toast({
+          title: "خطا در اعتبارسنجی فرم",
+          description: errorMessage,
+          variant: "destructive",
+        })
+        
+        // Scroll to first error field if possible
+        const firstErrorElement = document.querySelector(`[name="${firstErrorField}"]`)
+        if (firstErrorElement) {
+          firstErrorElement.scrollIntoView({ behavior: "smooth", block: "center" })
+        }
+      })} className="space-y-6">
         <div className="grid gap-6 mt-6 lg:grid-cols-[320px_1fr]">
           <div className="lg:sticky lg:top-24 lg:self-start lg:max-h-[calc(100vh-8rem)] lg:overflow-y-auto">
             {renderSummary()}

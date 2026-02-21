@@ -1,0 +1,3 @@
+﻿C:\Users\user\Desktop\42\TikQ\backend\Ticketing.Backend\src\Ticketing.Infrastructure\Data\AppDbContext.cs
+C:\Users\user\Desktop\42\TikQ\backend\Ticketing.Backend\src\Ticketing.Infrastructure\Data\Repositories\TicketRepository.cs
+C:\Users\user\Desktop\42\TikQ\backend\Ticketing.Backend\src\Ticketing.Infrastructure\Services\FileStorageService.cs

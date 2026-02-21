@@ -1,20 +1,37 @@
+using System.ComponentModel.DataAnnotations;
 using Ticketing.Domain.Enums;
 
 namespace Ticketing.Application.DTOs;
 
 public class TicketDynamicFieldRequest
 {
+    [Required]
     public int FieldDefinitionId { get; set; }
+    
+    [Required]
     public string Value { get; set; } = string.Empty;
 }
 
 public class TicketCreateRequest
 {
+    [Required(ErrorMessage = "Title is required")]
+    [StringLength(500, MinimumLength = 3, ErrorMessage = "Title must be between 3 and 500 characters")]
     public string Title { get; set; } = string.Empty;
+    
+    [Required(ErrorMessage = "Description is required")]
+    [StringLength(5000, MinimumLength = 10, ErrorMessage = "Description must be between 10 and 5000 characters")]
     public string Description { get; set; } = string.Empty;
+    
+    [Required(ErrorMessage = "CategoryId is required")]
+    [Range(1, int.MaxValue, ErrorMessage = "CategoryId must be a positive integer")]
     public int CategoryId { get; set; }
+    
+    [Range(1, int.MaxValue, ErrorMessage = "SubcategoryId must be a positive integer if provided")]
     public int? SubcategoryId { get; set; }
+    
+    [Required(ErrorMessage = "Priority is required")]
     public TicketPriority Priority { get; set; }
+    
     public List<TicketDynamicFieldRequest>? DynamicFields { get; set; }
 }
 
@@ -25,6 +42,26 @@ public class TicketUpdateRequest
     public Guid? AssignedToUserId { get; set; }
     public DateTime? DueDate { get; set; }
     public string? Description { get; set; }
+}
+
+/// <summary>
+/// Represents a file attachment for ticket creation (Application layer abstraction, no web framework dependency)
+/// </summary>
+public class FileAttachmentRequest
+{
+    public string FileName { get; set; } = string.Empty;
+    public string ContentType { get; set; } = string.Empty;
+    public byte[] Content { get; set; } = Array.Empty<byte>();
+    public long FileSize { get; set; }
+}
+
+public class TicketAttachmentDto
+{
+    public Guid Id { get; set; }
+    public string FileName { get; set; } = string.Empty;
+    public string FileUrl { get; set; } = string.Empty;
+    public long FileSize { get; set; }
+    public string ContentType { get; set; } = string.Empty;
 }
 
 public class TicketResponse
@@ -38,7 +75,11 @@ public class TicketResponse
     public string? SubcategoryName { get; set; }
     public TicketPriority Priority { get; set; }
     public List<TicketDynamicFieldResponse>? DynamicFields { get; set; }
-    public TicketStatus Status { get; set; }
+    public List<TicketAttachmentDto>? Attachments { get; set; }
+    public TicketStatus CanonicalStatus { get; set; }
+    public TicketStatus DisplayStatus { get; set; }
+    [Obsolete("Use DisplayStatus for UI rendering or CanonicalStatus for logic")]
+    public TicketStatus Status => DisplayStatus;
     public Guid CreatedByUserId { get; set; }
     public string CreatedByName { get; set; } = string.Empty;
     public string CreatedByEmail { get; set; } = string.Empty;
@@ -49,6 +90,10 @@ public class TicketResponse
     public string? AssignedToEmail { get; set; }
     public string? AssignedToPhoneNumber { get; set; }
     public string? AssignedTechnicianName { get; set; }
+    /// <summary>
+    /// List of all technicians assigned to this ticket (multi-technician assignment)
+    /// </summary>
+    public List<TicketTechnicianDto>? AssignedTechnicians { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
     public DateTime? DueDate { get; set; }
@@ -76,7 +121,10 @@ public class TicketCalendarResponse
     public Guid Id { get; set; }
     public string TicketNumber { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
-    public TicketStatus Status { get; set; }
+    public TicketStatus CanonicalStatus { get; set; }
+    public TicketStatus DisplayStatus { get; set; }
+    [Obsolete("Use DisplayStatus for UI rendering")]
+    public TicketStatus Status => DisplayStatus;
     public TicketPriority Priority { get; set; }
     public string CategoryName { get; set; } = string.Empty;
     public string? AssignedTechnicianName { get; set; }
@@ -103,6 +151,13 @@ public class UpdateTechnicianStateRequest
 public class SetResponsibleTechnicianRequest
 {
     public Guid ResponsibleTechnicianId { get; set; }
+}
+
+public class HandoffTicketRequest
+{
+    public Guid ToTechnicianId { get; set; }
+    public string? Reason { get; set; }
+    public string? Note { get; set; }
 }
 
 public class TicketTechnicianDto
@@ -138,7 +193,10 @@ public class UpdateWorkSessionRequest
 public class TicketCollaborationResponse
 {
     public Guid TicketId { get; set; }
-    public TicketStatus Status { get; set; }
+    public TicketStatus CanonicalStatus { get; set; }
+    public TicketStatus DisplayStatus { get; set; }
+    [Obsolete("Use DisplayStatus for UI rendering")]
+    public TicketStatus Status => DisplayStatus;
     public TicketActivityDto? LastActivity { get; set; }
     public List<TicketActivityDto> RecentActivities { get; set; } = new();
     public List<ActiveTechnicianDto> ActiveTechnicians { get; set; } = new();

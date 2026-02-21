@@ -17,7 +17,7 @@ interface TicketResponsibleDelegationProps {
 }
 
 export function TicketResponsibleDelegation({ ticketId, ticket, onUpdate }: TicketResponsibleDelegationProps) {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const [assignedTechnicians, setAssignedTechnicians] = useState<ApiTicketTechnicianDto[]>([]);
   const [selectedTechnicianId, setSelectedTechnicianId] = useState<string>("");
   const [loading, setLoading] = useState(false);
@@ -25,7 +25,7 @@ export function TicketResponsibleDelegation({ ticketId, ticket, onUpdate }: Tick
 
   useEffect(() => {
     const loadTechnicians = async () => {
-      if (!token) return;
+      if (!user) return;
       try {
         const techs = await getTicketTechnicians(token, ticketId);
         setAssignedTechnicians(techs);
@@ -55,7 +55,7 @@ export function TicketResponsibleDelegation({ ticketId, ticket, onUpdate }: Tick
       return;
     }
 
-    if (!token) {
+    if (!user) {
       toast.error("دسترسی غیرمجاز");
       return;
     }

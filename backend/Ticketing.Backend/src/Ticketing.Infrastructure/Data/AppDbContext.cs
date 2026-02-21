@@ -11,10 +11,10 @@ public class AppDbContext : DbContext
     public DbSet<Category> Categories => Set<Category>();
     public DbSet<Subcategory> Subcategories => Set<Subcategory>();
     public DbSet<Attachment> Attachments => Set<Attachment>();
-    public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<SystemSettings> SystemSettings => Set<SystemSettings>();
     public DbSet<UserPreferences> UserPreferences => Set<UserPreferences>();
     public DbSet<Technician> Technicians => Set<Technician>();
+    public DbSet<TechnicianSubcategoryPermission> TechnicianSubcategoryPermissions => Set<TechnicianSubcategoryPermission>();
     public DbSet<TicketTechnician> TicketTechnicians => Set<TicketTechnician>();
     public DbSet<TicketActivity> TicketActivities => Set<TicketActivity>();
     public DbSet<TicketWorkSession> TicketWorkSessions => Set<TicketWorkSession>();

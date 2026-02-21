@@ -67,11 +67,6 @@ export async function getMyPreferences(token: string | null): Promise<ApiUserPre
     }
   }
 
-  // If no token, return stored or defaults
-  if (!token) {
-    return storedPrefs || getDefaultPreferences()
-  }
-
   // If we know server doesn't support preferences, skip server call
   if (serverPrefsSupported === false) {
     return storedPrefs || getDefaultPreferences()
@@ -140,11 +135,6 @@ export async function updateMyPreferences(
   
   // Always save to localStorage immediately (works offline, instant)
   savePreferencesToStorage(prefsResponse)
-
-  // If no token, just use localStorage
-  if (!token) {
-    return prefsResponse
-  }
 
   // If we know server doesn't support preferences, skip server call
   if (serverPrefsSupported === false) {

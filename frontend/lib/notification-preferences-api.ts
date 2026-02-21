@@ -5,9 +5,6 @@ import type { ApiNotificationPreferencesResponse, ApiNotificationPreferencesUpda
  * Get current user's notification preferences
  */
 export async function getMyNotificationPreferences(token: string | null): Promise<ApiNotificationPreferencesResponse> {
-  if (!token) {
-    throw new Error("Authentication required")
-  }
   return apiRequest<ApiNotificationPreferencesResponse>("/api/users/me/notifications", {
     method: "GET",
     token,
@@ -21,9 +18,6 @@ export async function updateMyNotificationPreferences(
   token: string | null,
   preferences: ApiNotificationPreferencesUpdateRequest
 ): Promise<ApiNotificationPreferencesResponse> {
-  if (!token) {
-    throw new Error("Authentication required")
-  }
   return apiRequest<ApiNotificationPreferencesResponse>("/api/users/me/notifications", {
     method: "PUT",
     token,

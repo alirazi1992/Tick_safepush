@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,37 +18,48 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "@/hooks/use-toast";
+import { useAuth } from "@/lib/auth-context";
 import { Loader2, Trash2, Edit2, Save, X } from "lucide-react";
 import type { FormFieldDef, FieldType } from "@/lib/dynamic-forms";
 import { parseOptions } from "@/lib/dynamic-forms";
 import {
   getFieldDefinitions,
+  getCategoryFieldDefinitions,
   createFieldDefinition,
+  createCategoryFieldDefinition,
   updateFieldDefinition,
+  updateCategoryFieldDefinition,
   deleteFieldDefinition,
+  deleteCategoryFieldDefinition,
   type FieldDefinitionResponse,
 } from "@/lib/field-definitions-api";
 
 interface SubcategoryFieldDesignerDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  subcategoryId: number;
+  scopeType?: "subcategory" | "category";
+  scopeId: number;
   token: string | null;
 }
 
 export function SubcategoryFieldDesignerDialog({
   open,
   onOpenChange,
-  subcategoryId,
+  scopeType = "subcategory",
+  scopeId,
   token,
 }: SubcategoryFieldDesignerDialogProps) {
+  const { user } = useAuth();
   const [fields, setFields] = useState<FieldDefinitionResponse[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isBackendDown, setIsBackendDown] = useState(false);
+  const [lastTriedUrls, setLastTriedUrls] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [deletingIndex, setDeletingIndex] = useState<number | null>(null);
   const [showDevDiagnostics, setShowDevDiagnostics] = useState(false);
+  const errorLogRef = useRef<Set<string>>(new Set());
 
   // New field form state
   const [newField, setNewField] = useState<{
@@ -58,6 +69,7 @@ export function SubcategoryFieldDesignerDialog({
     isRequired: boolean;
     defaultValue?: string;
     optionsText?: string;
+    displayOrder?: number;
   }>({
     key: "",
     label: "",
@@ -65,44 +77,73 @@ export function SubcategoryFieldDesignerDialog({
     isRequired: false,
     defaultValue: "",
     optionsText: "",
+    displayOrder: 0,
   });
 
   // Validation errors
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const loadFields = useCallback(async () => {
-    if (!token) return;
+    if (!user) return;
 
     setLoading(true);
     setError(null);
+    setIsBackendDown(false);
+    setLastTriedUrls([]);
     try {
-      const loadedFields = await getFieldDefinitions(token, subcategoryId);
+      const loadedFields =
+        scopeType === "category"
+          ? await getCategoryFieldDefinitions(token, scopeId)
+          : await getFieldDefinitions(token, scopeId);
       setFields(loadedFields);
       setError(null);
+      setIsBackendDown(false);
     } catch (error: any) {
-      console.error("[SubcategoryFieldDesigner] Error loading fields:", error);
-      const errorMessage = error?.message || `خطا در دریافت فیلدها (${error?.status || "unknown"})`;
+      const isNetworkError =
+        error?.isNetworkError ||
+        error?.message?.includes("Cannot connect to backend server");
+      const status = typeof error?.status === "number" ? error.status : undefined;
+      const errorMessage = isNetworkError
+        ? "Backend not reachable. Start backend with .\\tools\\run-backend.ps1"
+        : status === 401
+          ? "Unauthorized – please login"
+          : status === 403
+            ? "Not enough permissions to access this resource"
+            : status === 404
+              ? (process.env.NODE_ENV === "development" && error?.requestPath
+                  ? `Endpoint not found: ${error.requestPath}`
+                  : "Endpoint not found")
+        : error?.message || `خطا در دریافت فیلدها (${error?.status || "unknown"})`;
+      const logKey = `${scopeType}:${scopeId}:${isNetworkError ? "network" : "error"}`;
+      if (process.env.NODE_ENV === "development" && !errorLogRef.current.has(logKey)) {
+        console.error("[SubcategoryFieldDesigner] Error loading fields:", error);
+        errorLogRef.current.add(logKey);
+      }
       setError(errorMessage);
+      setIsBackendDown(isNetworkError);
+      setLastTriedUrls(Array.isArray(error?.triedUrls) ? error.triedUrls : []);
       
       // Check if it's a schema error
       if (errorMessage.includes("schema") || errorMessage.includes("migration") || errorMessage.includes("DefaultValue")) {
         setError("خطای پایگاه داده: لطفاً سرور بک‌اند را راه‌اندازی مجدد کنید تا مایگریشن‌ها اعمال شوند.");
       }
       
-      toast({
-        title: "خطا در بارگذاری فیلدها",
-        description: errorMessage,
-        variant: "destructive",
-      });
+      if (!isNetworkError) {
+        toast({
+          title: "خطا در بارگذاری فیلدها",
+          description: errorMessage,
+          variant: "destructive",
+        });
+      }
       setFields([]);
     } finally {
       setLoading(false);
     }
-  }, [token, subcategoryId]);
+  }, [token, scopeId, scopeType]);
 
   // Load fields when dialog opens
   useEffect(() => {
-    if (open && token && subcategoryId) {
+    if (open && token && scopeId) {
       loadFields();
     } else {
       // Reset state when dialog closes
@@ -116,11 +157,14 @@ export function SubcategoryFieldDesignerDialog({
         isRequired: false,
         defaultValue: "",
         optionsText: "",
+        displayOrder: 0,
       });
       setErrors({});
       setError(null);
+      setIsBackendDown(false);
+      setLastTriedUrls([]);
     }
-  }, [open, token, subcategoryId, loadFields]);
+  }, [open, token, scopeId, loadFields]);
 
   const validateNewField = (): boolean => {
     const newErrors: Record<string, string> = {};
@@ -139,7 +183,7 @@ export function SubcategoryFieldDesignerDialog({
     }
 
     if (
-      (newField.type === "select" || newField.type === "radio") &&
+      (newField.type === "select" || newField.type === "multiselect" || newField.type === "radio") &&
       !newField.optionsText?.trim()
     ) {
       newErrors.optionsText = "برای فیلدهای انتخابی، گزینه‌ها الزامی است";
@@ -150,27 +194,40 @@ export function SubcategoryFieldDesignerDialog({
   };
 
   const handleAddField = async () => {
-    if (!token || !validateNewField()) {
+    if (!user || !validateNewField()) {
       return;
     }
 
     setSaving(true);
     try {
       const options =
-        newField.type === "select" || newField.type === "radio"
+        (newField.type === "select" || newField.type === "multiselect" || newField.type === "radio")
           ? parseOptions(newField.optionsText || "")
           : [];
 
       const backendType = mapFrontendTypeToBackendType(newField.type);
-      const created = await createFieldDefinition(token, subcategoryId, {
-        name: newField.key,
-        label: newField.label,
-        key: newField.key,
-        type: backendType,
-        isRequired: newField.isRequired,
-        defaultValue: newField.defaultValue || undefined,
-        options: options.length > 0 ? options : undefined,
-      });
+      const created =
+        scopeType === "category"
+          ? await createCategoryFieldDefinition(token, scopeId, {
+              name: newField.key,
+              label: newField.label,
+              key: newField.key,
+              type: backendType,
+              isRequired: newField.isRequired,
+              defaultValue: newField.defaultValue || undefined,
+              options: options.length > 0 ? options : undefined,
+              displayOrder: newField.displayOrder || 0,
+            })
+          : await createFieldDefinition(token, scopeId, {
+              name: newField.key,
+              label: newField.label,
+              key: newField.key,
+              type: backendType,
+              isRequired: newField.isRequired,
+              defaultValue: newField.defaultValue || undefined,
+              options: options.length > 0 ? options : undefined,
+              displayOrder: newField.displayOrder || 0,
+            });
 
       // Refresh fields list
       await loadFields();
@@ -183,6 +240,7 @@ export function SubcategoryFieldDesignerDialog({
         isRequired: false,
         defaultValue: "",
         optionsText: "",
+        displayOrder: 0,
       });
       setErrors({});
 
@@ -205,7 +263,7 @@ export function SubcategoryFieldDesignerDialog({
   };
 
   const handleUpdateField = async (index: number) => {
-    if (!token || editingIndex === null) return;
+    if (!user || editingIndex === null) return;
 
     const field = fields[index];
     const updatedField = { ...field };
@@ -226,13 +284,25 @@ export function SubcategoryFieldDesignerDialog({
         mapBackendTypeToFrontendType(updatedField.type)
       );
 
-      await updateFieldDefinition(token, subcategoryId, field.id, {
-        label: updatedField.label,
-        type: backendType,
-        isRequired: updatedField.isRequired,
-        defaultValue: updatedField.defaultValue || undefined,
-        options: updatedField.options || undefined,
-      });
+      if (scopeType === "category") {
+        await updateCategoryFieldDefinition(token, scopeId, field.id, {
+          label: updatedField.label,
+          type: backendType,
+          isRequired: updatedField.isRequired,
+          defaultValue: updatedField.defaultValue || undefined,
+          options: updatedField.options || undefined,
+          displayOrder: updatedField.displayOrder ?? 0,
+        });
+      } else {
+        await updateFieldDefinition(token, scopeId, field.id, {
+          label: updatedField.label,
+          type: backendType,
+          isRequired: updatedField.isRequired,
+          defaultValue: updatedField.defaultValue || undefined,
+          options: updatedField.options || undefined,
+          displayOrder: updatedField.displayOrder ?? 0,
+        });
+      }
 
       await loadFields();
       setEditingIndex(null);
@@ -256,7 +326,7 @@ export function SubcategoryFieldDesignerDialog({
   };
 
   const handleDeleteField = async (index: number) => {
-    if (!token) return;
+    if (!user) return;
 
     const field = fields[index];
     if (!confirm(`آیا از حذف فیلد "${field.label}" مطمئن هستید؟`)) {
@@ -265,7 +335,11 @@ export function SubcategoryFieldDesignerDialog({
 
     setDeletingIndex(index);
     try {
-      await deleteFieldDefinition(token, subcategoryId, field.id);
+      if (scopeType === "category") {
+        await deleteCategoryFieldDefinition(token, scopeId, field.id);
+      } else {
+        await deleteFieldDefinition(token, scopeId, field.id);
+      }
       await loadFields();
       toast({
         title: "موفق",
@@ -294,6 +368,7 @@ export function SubcategoryFieldDesignerDialog({
       Phone: "tel",
       Date: "date",
       Select: "select",
+      MultiSelect: "multiselect",
       Boolean: "checkbox",
     };
     return mapping[backendType] || "text";
@@ -309,6 +384,7 @@ export function SubcategoryFieldDesignerDialog({
       date: "Date",
       datetime: "Date",
       select: "Select",
+      multiselect: "MultiSelect",
       radio: "Select",
       checkbox: "Boolean",
       file: "Text",
@@ -324,7 +400,8 @@ export function SubcategoryFieldDesignerDialog({
       Email: "ایمیل",
       Phone: "تلفن",
       Date: "تاریخ",
-      Select: "لیست انتخابی",
+      Select: "لیست انتخابی (تک‌انتخاب)",
+      MultiSelect: "لیست انتخابی (چندانتخاب)",
       Boolean: "تیک‌زدنی",
     };
     return labels[type] || type;
@@ -332,10 +409,10 @@ export function SubcategoryFieldDesignerDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-6xl max-h-[90vh] overflow-hidden flex flex-col font-iran" dir="rtl">
+      <DialogContent className="max-h-[85vh] overflow-y-auto w-[95vw] sm:w-[90vw] md:max-w-6xl flex flex-col font-iran" dir="rtl">
         <DialogHeader>
           <DialogTitle className="text-right">
-            طراحی فیلدهای سفارشی
+            {scopeType === "category" ? "طراحی فیلدهای دسته‌بندی" : "طراحی فیلدهای زیر دسته"}
             {loading && <Loader2 className="inline-block w-4 h-4 mr-2 animate-spin" />}
           </DialogTitle>
         </DialogHeader>
@@ -368,7 +445,7 @@ export function SubcategoryFieldDesignerDialog({
               <details className="mt-2 text-xs">
                 <summary className="cursor-pointer text-red-700">جزئیات خطا (فقط برای توسعه)</summary>
                 <pre className="mt-2 p-2 bg-red-100 rounded text-xs overflow-auto max-h-40">
-                  {JSON.stringify({ error, subcategoryId }, null, 2)}
+                  {JSON.stringify({ error, scopeId, scopeType }, null, 2)}
                 </pre>
               </details>
             )}
@@ -385,8 +462,25 @@ export function SubcategoryFieldDesignerDialog({
           </div>
         )}
 
+        {/* Backend Down State */}
+        {isBackendDown && !loading && (
+          <div className="border border-amber-300 rounded-lg p-4 bg-amber-50 mb-4">
+            <p className="text-sm text-amber-900 mb-2">
+              Backend not reachable. Start backend with .\tools\run-backend.ps1
+            </p>
+            <Button variant="outline" size="sm" onClick={loadFields}>
+              تلاش مجدد
+            </Button>
+            {process.env.NODE_ENV === "development" && lastTriedUrls.length > 0 && (
+              <p className="text-xs text-amber-700 mt-2">
+                Tried: {lastTriedUrls.join(", ")}
+              </p>
+            )}
+          </div>
+        )}
+
         {/* Main Content: Two Column Layout */}
-        {!loading && !error && (
+        {!loading && !error && !isBackendDown && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 flex-1 overflow-hidden">
             {/* Left Side: Existing Fields List */}
             <div className="border rounded-lg p-4 overflow-y-auto">
@@ -449,6 +543,23 @@ export function SubcategoryFieldDesignerDialog({
                               updated[index] = {
                                 ...updated[index],
                                 defaultValue: e.target.value,
+                              };
+                              setFields(updated);
+                            }}
+                            className="text-right"
+                            dir="rtl"
+                          />
+                        </div>
+                        <div className="col-span-12 md:col-span-4">
+                          <Label className="text-right">ترتیب نمایش</Label>
+                          <Input
+                            type="number"
+                            value={field.displayOrder ?? 0}
+                            onChange={(e) => {
+                              const updated = [...fields];
+                              updated[index] = {
+                                ...updated[index],
+                                displayOrder: Number(e.target.value) || 0,
                               };
                               setFields(updated);
                             }}
@@ -532,6 +643,7 @@ export function SubcategoryFieldDesignerDialog({
                           شناسه: <code className="text-xs">{field.key}</code> • نوع:{" "}
                           {getTypeLabel(field.type)}
                           {field.defaultValue && ` • پیش‌فرض: ${field.defaultValue}`}
+                          {typeof field.displayOrder === "number" && ` • ترتیب: ${field.displayOrder}`}
                         </div>
                         {field.options && field.options.length > 0 && (
                           <div className="text-xs text-muted-foreground">
@@ -613,6 +725,18 @@ export function SubcategoryFieldDesignerDialog({
                 )}
               </div>
               <div className="col-span-12 md:col-span-4">
+                <Label className="text-right">ترتیب نمایش</Label>
+                <Input
+                  type="number"
+                  value={newField.displayOrder ?? 0}
+                  onChange={(e) =>
+                    setNewField({ ...newField, displayOrder: Number(e.target.value) || 0 })
+                  }
+                  className="text-right"
+                  dir="rtl"
+                />
+              </div>
+              <div className="col-span-12 md:col-span-4">
                 <Label className="text-right">نوع</Label>
                 <Select
                   value={newField.type}
@@ -631,7 +755,8 @@ export function SubcategoryFieldDesignerDialog({
                     <SelectItem value="email">ایمیل</SelectItem>
                     <SelectItem value="tel">تلفن</SelectItem>
                     <SelectItem value="date">تاریخ</SelectItem>
-                    <SelectItem value="select">لیست انتخابی</SelectItem>
+                    <SelectItem value="select">لیست انتخابی (تک‌انتخاب)</SelectItem>
+                    <SelectItem value="multiselect">لیست انتخابی (چندانتخاب)</SelectItem>
                     <SelectItem value="checkbox">تیک‌زدنی</SelectItem>
                   </SelectContent>
                 </Select>

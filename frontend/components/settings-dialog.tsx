@@ -313,7 +313,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const onSystemSettingsSubmit = async (data: ApiSystemSettingsResponse) => {
     console.log("Submitting system settings:", data)
     
-    if (!token || !isAdmin) {
+    if (!user || !isAdmin) {
       toast({
         title: "دسترسی محدود",
         description: "فقط مدیران می‌توانند تنظیمات سیستم را تغییر دهند",
@@ -415,7 +415,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   }
 
   const handleNotificationSave = async () => {
-    if (!token) {
+    if (!user) {
       toast({
         title: "خطا",
         description: "لطفاً ابتدا وارد شوید",
@@ -785,7 +785,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden" dir="rtl">
+      <DialogContent className="max-h-[85vh] overflow-y-auto w-[95vw] sm:w-[90vw] md:max-w-4xl" dir="rtl">
         <DialogHeader className="text-right">
           <DialogTitle className="text-right flex items-center gap-2 justify-end">
             <Settings className="w-5 h-5" />
@@ -1221,7 +1221,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                       <Button
                         type="button"
                         onClick={handleNotificationSave}
-                        disabled={notificationPreferencesSaving || notificationPreferencesLoading || !token}
+                        disabled={notificationPreferencesSaving || notificationPreferencesLoading || !user}
                       >
                         {notificationPreferencesSaving ? (
                           <>

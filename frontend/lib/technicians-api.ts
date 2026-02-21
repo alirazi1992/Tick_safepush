@@ -4,20 +4,61 @@ import type {
   ApiTechnicianCreateRequest,
   ApiTechnicianUpdateRequest,
   ApiTechnicianStatusUpdateRequest,
+  ApiTechnicianListResponse,
 } from "./api-types"
 
 /**
  * Get all technicians (Admin only)
  * Backend route: GET /api/admin/technicians
  */
-export async function getAllTechnicians(token: string | null): Promise<ApiTechnicianResponse[]> {
-  if (!token) {
-    throw new Error("Authentication required")
+export async function getAllTechnicians(
+  token: string | null,
+  options?: { page?: number; pageSize?: number; search?: string }
+): Promise<ApiTechnicianListResponse> {
+  const params = new URLSearchParams()
+  if (options?.page) params.set("page", options.page.toString())
+  if (options?.pageSize) params.set("pageSize", options.pageSize.toString())
+  if (options?.search) params.set("search", options.search)
+  const query = params.toString()
+  const response = await apiRequest<ApiTechnicianResponse[] | ApiTechnicianListResponse>(
+    `/api/admin/technicians${query ? `?${query}` : ""}`,
+    {
+    method: "GET",
+    token,
+    }
+  )
+  if (Array.isArray(response)) {
+    return {
+      items: response,
+      totalCount: response.length,
+      page: 1,
+      pageSize: response.length,
+    }
   }
-  return apiRequest<ApiTechnicianResponse[]>("/api/admin/technicians", {
+  return response
+}
+
+/**
+ * Get current technician's profile (Technician role only)
+ * Backend route: GET /api/technician/me
+ */
+export async function getMyTechnicianProfile(token: string | null): Promise<ApiTechnicianResponse> {
+  return apiRequest<ApiTechnicianResponse>("/api/technician/me", {
     method: "GET",
     token,
   })
+}
+
+/**
+ * Get assignable technicians for supervisor delegation (Supervisor Technician only)
+ * Backend route: GET /api/technician/available
+ * Returns only active, non-supervisor technicians
+ */
+export async function getAssignableTechnicians(token: string | null): Promise<ApiTechnicianResponse[]> {
+  return apiRequest<ApiTechnicianResponse[]>("/api/technician/available", {
+    method: "GET",
+    token,
+  });
 }
 
 /**
@@ -28,9 +69,6 @@ export async function getTechnicianById(
   token: string | null,
   id: string
 ): Promise<ApiTechnicianResponse> {
-  if (!token) {
-    throw new Error("Authentication required")
-  }
   // Check if TechniciansController exists with /api/admin/technicians route
   // If not, this will 404 - handle gracefully if needed
   return apiRequest<ApiTechnicianResponse>(`/api/admin/technicians/${id}`, {
@@ -46,9 +84,6 @@ export async function createTechnician(
   token: string | null,
   technician: ApiTechnicianCreateRequest
 ): Promise<ApiTechnicianResponse> {
-  if (!token) {
-    throw new Error("Authentication required")
-  }
   return apiRequest<ApiTechnicianResponse>("/api/admin/technicians", {
     method: "POST",
     token,
@@ -64,9 +99,6 @@ export async function updateTechnician(
   id: string,
   technician: ApiTechnicianUpdateRequest
 ): Promise<ApiTechnicianResponse> {
-  if (!token) {
-    throw new Error("Authentication required")
-  }
   return apiRequest<ApiTechnicianResponse>(`/api/admin/technicians/${id}`, {
     method: "PUT",
     token,
@@ -82,10 +114,6 @@ export async function updateTechnicianStatus(
   id: string,
   isActive: boolean
 ): Promise<void> {
-  if (!token) {
-    throw new Error("Authentication required")
-  }
-  
   const requestBody = { isActive }
   console.log("[technicians-api] Updating technician status:", { id, isActive, requestBody })
   
@@ -109,16 +137,14 @@ export async function updateTechnicianStatus(
 }
 
 /**
- * Assign technician to ticket (Admin only)
+ * Assign a technician to a ticket (Admin only)
+ * Backend route: PUT /api/tickets/{id}/assign-technician
  */
 export async function assignTechnicianToTicket(
   token: string | null,
   ticketId: string,
   technicianId: string
-): Promise<any> {
-  if (!token) {
-    throw new Error("Authentication required")
-  }
+) {
   return apiRequest(`/api/tickets/${ticketId}/assign-technician`, {
     method: "PUT",
     token,
@@ -126,3 +152,73 @@ export async function assignTechnicianToTicket(
   })
 }
 
+/**
+ * Link a Technician to a User account (Admin only)
+ * A Technician MUST be linked to a User account (with Role=Technician) to be eligible for ticket assignment.
+ */
+export async function linkTechnicianToUser(
+  token: string | null,
+  technicianId: string,
+  userId: string
+): Promise<ApiTechnicianResponse> {
+  return apiRequest<ApiTechnicianResponse>(`/api/admin/technicians/${technicianId}/link-user`, {
+    method: "PATCH",
+    token,
+    body: { userId },
+  })
+}
+
+/**
+ * Update technician expertise (subcategory permissions) (Admin only)
+ */
+export async function updateTechnicianExpertise(
+  token: string | null,
+  id: string,
+  subcategoryIds: number[] | null
+): Promise<ApiTechnicianResponse> {
+  return apiRequest<ApiTechnicianResponse>(`/api/admin/technicians/${id}/expertise`, {
+    method: "PUT",
+    token,
+    body: { subcategoryIds },
+  })
+}
+
+/**
+ * Delete (soft delete) a technician (Admin only)
+ * This performs a soft delete:
+ * - Sets IsDeleted=true, DeletedAt=UtcNow
+ * - Sets IsActive=false
+ * - Locks out the linked user account (prevents login)
+ * 
+ * Historical ticket data remains intact for audit purposes.
+ */
+export interface DeleteTechnicianResponse {
+  message: string
+  technicianId: string
+  isDeleted: boolean
+  technician?: ApiTechnicianResponse
+}
+
+export async function deleteTechnician(
+  token: string | null,
+  id: string
+): Promise<DeleteTechnicianResponse> {
+  console.log("[technicians-api] Deleting technician:", { id })
+  
+  try {
+    const response = await apiRequest<DeleteTechnicianResponse>(`/api/admin/technicians/${id}`, {
+      method: "DELETE",
+      token,
+    })
+    console.log("[technicians-api] Technician deleted successfully:", response)
+    return response
+  } catch (error: any) {
+    console.error("[technicians-api] Failed to delete technician:", {
+      id,
+      status: error?.status,
+      message: error?.message,
+      body: error?.body,
+    })
+    throw error
+  }
+}

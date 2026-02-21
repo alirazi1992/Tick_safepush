@@ -5,9 +5,6 @@ import type { ApiSystemSettingsResponse, ApiSystemSettingsUpdateRequest } from "
  * Get current system settings (Admin only)
  */
 export async function getSystemSettings(token: string | null): Promise<ApiSystemSettingsResponse> {
-  if (!token) {
-    throw new Error("Authentication required")
-  }
   return apiRequest<ApiSystemSettingsResponse>("/api/settings/system", {
     method: "GET",
     token,
@@ -21,9 +18,6 @@ export async function updateSystemSettings(
   token: string | null,
   settings: ApiSystemSettingsUpdateRequest
 ): Promise<ApiSystemSettingsResponse> {
-  if (!token) {
-    throw new Error("Authentication required")
-  }
   return apiRequest<ApiSystemSettingsResponse>("/api/settings/system", {
     method: "PUT",
     token,

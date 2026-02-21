@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Clock, MessageSquare, UserPlus, CheckCircle, XCircle } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
+import { toFaDateTime } from "@/lib/datetime"
 import { getTicketActivities } from "@/lib/tickets-api"
 import type { ApiTicketActivityDto } from "@/lib/api-types"
 
@@ -28,17 +29,17 @@ interface TicketActivityTimelineProps {
 }
 
 export function TicketActivityTimeline({ ticketId }: TicketActivityTimelineProps) {
-  const { token } = useAuth()
+  const { token, user } = useAuth()
   const [activities, setActivities] = useState<ApiTicketActivityDto[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    if (!token) return
+    if (!user) return
     loadActivities()
-  }, [token, ticketId])
+  }, [user, ticketId])
 
   const loadActivities = async () => {
-    if (!token) return
+    if (!user) return
     try {
       setLoading(true)
       const data = await getTicketActivities(token, ticketId)
@@ -48,17 +49,6 @@ export function TicketActivityTimeline({ ticketId }: TicketActivityTimelineProps
     } finally {
       setLoading(false)
     }
-  }
-
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString)
-    return date.toLocaleString("fa-IR", {
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    })
   }
 
   if (loading) {
@@ -90,7 +80,7 @@ export function TicketActivityTimeline({ ticketId }: TicketActivityTimelineProps
                       </Badge>
                     </div>
                     <p className="text-sm text-muted-foreground mb-1">{activity.message}</p>
-                    <p className="text-xs text-muted-foreground">{formatDate(activity.createdAt)}</p>
+                    <p className="text-xs text-muted-foreground">{toFaDateTime(activity.createdAt)}</p>
                   </div>
                 </div>
               </CardContent>

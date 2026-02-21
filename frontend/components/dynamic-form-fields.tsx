@@ -25,7 +25,7 @@ export function DynamicFormFields({ category, control, errors }: DynamicFormFiel
               <SelectTrigger>
                 <SelectValue placeholder="انتخاب نوع دستگاه" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent side="bottom" align="start" sideOffset={8} avoidCollisions={false}>
                 <SelectItem value="desktop">رایانه رومیزی</SelectItem>
                 <SelectItem value="laptop">لپ‌تاپ</SelectItem>
                 <SelectItem value="printer">چاپگر</SelectItem>
@@ -69,7 +69,7 @@ export function DynamicFormFields({ category, control, errors }: DynamicFormFiel
               <SelectTrigger>
                 <SelectValue placeholder="وضعیت گارانتی" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent side="bottom" align="start" sideOffset={8} avoidCollisions={false}>
                 <SelectItem value="under-warranty">تحت گارانتی</SelectItem>
                 <SelectItem value="expired">گارانتی منقضی</SelectItem>
                 <SelectItem value="unknown">نامشخص</SelectItem>
@@ -90,7 +90,7 @@ export function DynamicFormFields({ category, control, errors }: DynamicFormFiel
               <SelectTrigger>
                 <SelectValue placeholder="نوع مشکل" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent side="bottom" align="start" sideOffset={8} avoidCollisions={false}>
                 <SelectItem value="not-turning-on">روشن نمی‌شود</SelectItem>
                 <SelectItem value="slow-performance">عملکرد کند</SelectItem>
                 <SelectItem value="hardware-failure">خرابی سخت‌افزار</SelectItem>
@@ -141,7 +141,7 @@ export function DynamicFormFields({ category, control, errors }: DynamicFormFiel
               <SelectTrigger>
                 <SelectValue placeholder="انتخاب سیستم عامل" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent side="bottom" align="start" sideOffset={8} avoidCollisions={false}>
                 <SelectItem value="windows-11">Windows 11</SelectItem>
                 <SelectItem value="windows-10">Windows 10</SelectItem>
                 <SelectItem value="macos">macOS</SelectItem>
@@ -164,7 +164,7 @@ export function DynamicFormFields({ category, control, errors }: DynamicFormFiel
               <SelectTrigger>
                 <SelectValue placeholder="نوع نصب" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent side="bottom" align="start" sideOffset={8} avoidCollisions={false}>
                 <SelectItem value="new-install">نصب جدید</SelectItem>
                 <SelectItem value="update">به‌روزرسانی</SelectItem>
                 <SelectItem value="reinstall">نصب مجدد</SelectItem>
@@ -208,7 +208,7 @@ export function DynamicFormFields({ category, control, errors }: DynamicFormFiel
               <SelectTrigger>
                 <SelectValue placeholder="نوع اتصال" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent side="bottom" align="start" sideOffset={8} avoidCollisions={false}>
                 <SelectItem value="ethernet">اترنت</SelectItem>
                 <SelectItem value="wifi">Wi-Fi</SelectItem>
                 <SelectItem value="vpn">VPN</SelectItem>
@@ -249,7 +249,7 @@ export function DynamicFormFields({ category, control, errors }: DynamicFormFiel
               <SelectTrigger>
                 <SelectValue placeholder="وضعیت اینترنت" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent side="bottom" align="start" sideOffset={8} avoidCollisions={false}>
                 <SelectItem value="no-access">بدون دسترسی</SelectItem>
                 <SelectItem value="limited">دسترسی محدود</SelectItem>
                 <SelectItem value="slow">اینترنت کند</SelectItem>
@@ -294,7 +294,7 @@ export function DynamicFormFields({ category, control, errors }: DynamicFormFiel
               <SelectTrigger>
                 <SelectValue placeholder="ارائه‌دهنده ایمیل" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent side="bottom" align="start" sideOffset={8} avoidCollisions={false}>
                 <SelectItem value="outlook">Outlook</SelectItem>
                 <SelectItem value="gmail">Gmail</SelectItem>
                 <SelectItem value="exchange">Exchange Server</SelectItem>
@@ -316,7 +316,7 @@ export function DynamicFormFields({ category, control, errors }: DynamicFormFiel
               <SelectTrigger>
                 <SelectValue placeholder="کلاینت ایمیل" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent side="bottom" align="start" sideOffset={8} avoidCollisions={false}>
                 <SelectItem value="outlook-app">Outlook App</SelectItem>
                 <SelectItem value="web-browser">مرورگر وب</SelectItem>
                 <SelectItem value="thunderbird">Thunderbird</SelectItem>
@@ -338,7 +338,7 @@ export function DynamicFormFields({ category, control, errors }: DynamicFormFiel
               <SelectTrigger>
                 <SelectValue placeholder="نوع مشکل" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent side="bottom" align="start" sideOffset={8} avoidCollisions={false}>
                 <SelectItem value="cannot-send">نمی‌توانم ایمیل ارسال کنم</SelectItem>
                 <SelectItem value="cannot-receive">ایمیل دریافت نمی‌کنم</SelectItem>
                 <SelectItem value="login-issue">مشکل ورود</SelectItem>
@@ -383,7 +383,7 @@ export function DynamicFormFields({ category, control, errors }: DynamicFormFiel
               <SelectTrigger>
                 <SelectValue placeholder="نوع حادثه" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent side="bottom" align="start" sideOffset={8} avoidCollisions={false}>
                 <SelectItem value="malware">بدافزار</SelectItem>
                 <SelectItem value="phishing">فیشینگ</SelectItem>
                 <SelectItem value="data-breach">نقض داده</SelectItem>
@@ -406,7 +406,7 @@ export function DynamicFormFields({ category, control, errors }: DynamicFormFiel
               <SelectTrigger>
                 <SelectValue placeholder="وضعیت داده‌ها" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent side="bottom" align="start" sideOffset={8} avoidCollisions={false}>
                 <SelectItem value="no-compromise">بدون نقض</SelectItem>
                 <SelectItem value="possible-compromise">احتمال نقض</SelectItem>
                 <SelectItem value="confirmed-compromise">نقض تأیید شده</SelectItem>
@@ -464,7 +464,7 @@ export function DynamicFormFields({ category, control, errors }: DynamicFormFiel
               <SelectTrigger>
                 <SelectValue placeholder="نوع دسترسی" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent side="bottom" align="start" sideOffset={8} avoidCollisions={false}>
                 <SelectItem value="new-account">حساب جدید</SelectItem>
                 <SelectItem value="permission-change">تغییر مجوز</SelectItem>
                 <SelectItem value="system-access">دسترسی سیستم</SelectItem>
@@ -497,7 +497,7 @@ export function DynamicFormFields({ category, control, errors }: DynamicFormFiel
               <SelectTrigger>
                 <SelectValue placeholder="وضعیت تأیید" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent side="bottom" align="start" sideOffset={8} avoidCollisions={false}>
                 <SelectItem value="approved">تأیید شده</SelectItem>
                 <SelectItem value="pending">در انتظار تأیید</SelectItem>
                 <SelectItem value="verbal-approval">تأیید شفاهی</SelectItem>
@@ -518,7 +518,7 @@ export function DynamicFormFields({ category, control, errors }: DynamicFormFiel
               <SelectTrigger>
                 <SelectValue placeholder="مدت زمان" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent side="bottom" align="start" sideOffset={8} avoidCollisions={false}>
                 <SelectItem value="permanent">دائمی</SelectItem>
                 <SelectItem value="temporary">موقت</SelectItem>
                 <SelectItem value="project-based">بر اساس پروژه</SelectItem>

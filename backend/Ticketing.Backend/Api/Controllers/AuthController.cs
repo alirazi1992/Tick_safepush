@@ -1,10 +1,17 @@
 using System.Security.Claims;
+using System.Security.Cryptography;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using Ticketing.Backend.Application.Common.Interfaces;
 using Ticketing.Backend.Application.DTOs;
 using Ticketing.Backend.Application.Services;
+using Ticketing.Backend.Domain.Entities;
 using Ticketing.Backend.Domain.Enums;
+using Ticketing.Backend.Infrastructure.Auth;
 using Ticketing.Backend.Infrastructure.Data;
 
 namespace Ticketing.Backend.Api.Controllers;
@@ -13,22 +20,86 @@ namespace Ticketing.Backend.Api.Controllers;
 [Route("api/[controller]")]
 public class AuthController : ControllerBase
 {
+    private const string AccessCookieName = "tikq_access";
+
+    private static readonly HashSet<string> ValidRoles = new(StringComparer.OrdinalIgnoreCase) { "Admin", "Technician", "Client", "Supervisor" };
+    private static readonly HashSet<string> ValidLandingPaths = new(StringComparer.OrdinalIgnoreCase) { "/admin", "/technician", "/client", "/supervisor" };
+
+    /// <summary>Fail-safe: do not treat as authenticated if role or landingPath is missing/invalid (no fallback to Client).</summary>
+    private static bool HasValidRoleAndLandingPath(string? role, string? landingPath)
+    {
+        return !string.IsNullOrWhiteSpace(role) && ValidRoles.Contains(role)
+            && !string.IsNullOrWhiteSpace(landingPath) && ValidLandingPaths.Contains(landingPath);
+    }
+
     private readonly IUserService _userService;
     private readonly AppDbContext _context;
+    private readonly IWebHostEnvironment _env;
+    private readonly IWindowsUserMapResolver _windowsUserMapResolver;
+    private readonly IAdUserLookup _adUserLookup;
+    private readonly WindowsAuthOptions _windowsAuthOptions;
+    private readonly EmergencyAdminOptions _emergencyAdminOptions;
+    private readonly IJwtTokenGenerator _jwtTokenGenerator;
+    private readonly IPasswordHasher<User> _passwordHasher;
 
-    public AuthController(IUserService userService, AppDbContext context)
+    public AuthController(
+        IUserService userService,
+        AppDbContext context,
+        IWebHostEnvironment env,
+        IWindowsUserMapResolver windowsUserMapResolver,
+        IAdUserLookup adUserLookup,
+        IOptions<WindowsAuthOptions> windowsAuthOptions,
+        IOptions<EmergencyAdminOptions> emergencyAdminOptions,
+        IJwtTokenGenerator jwtTokenGenerator,
+        IPasswordHasher<User> passwordHasher)
     {
         _userService = userService;
         _context = context;
+        _env = env;
+        _windowsUserMapResolver = windowsUserMapResolver;
+        _adUserLookup = adUserLookup;
+        _windowsAuthOptions = windowsAuthOptions?.Value ?? new WindowsAuthOptions();
+        _emergencyAdminOptions = emergencyAdminOptions?.Value ?? new EmergencyAdminOptions();
+        _jwtTokenGenerator = jwtTokenGenerator;
+        _passwordHasher = passwordHasher;
+    }
+
+    private void SetAccessCookie(string token)
+    {
+        Response.Cookies.Append(AccessCookieName, token, new CookieOptions
+        {
+            HttpOnly = true,
+            SameSite = SameSiteMode.Lax,
+            Secure = Request.IsHttps,
+            Path = "/",
+            Expires = DateTimeOffset.UtcNow.AddMinutes(30)
+        });
+    }
+
+    private void ClearAccessCookie()
+    {
+        Response.Cookies.Append(AccessCookieName, string.Empty, new CookieOptions
+        {
+            Path = "/",
+            SameSite = SameSiteMode.Lax,
+            HttpOnly = true,
+            Secure = Request.IsHttps,
+            Expires = DateTimeOffset.UtcNow.AddDays(-1)
+        });
     }
 
     // ------------------------------
-    // DEBUG: لیست یوزرها برای تست لاگین
+    // DEBUG: لیست یوزرها برای تست لاگین (Development only, Admin only)
     // ------------------------------
     [HttpGet("debug-users")]
-    [AllowAnonymous]
+    [Authorize(Roles = nameof(UserRole.Admin))]
     public async Task<IActionResult> GetDebugUsers([FromServices] AppDbContext context)
     {
+        if (!_env.IsDevelopment())
+        {
+            return NotFound();
+        }
+
         var users = await context.Users
             .Select(u => new
             {
@@ -55,20 +126,33 @@ public class AuthController : ControllerBase
     //    c) FORBIDDEN (HTTP 403) otherwise
     // 5. Email conflict → HTTP 409
     // 6. Invalid role → HTTP 400 (explicit error message)
+    // Body: flat JSON { "fullName", "email", "password", "role", ... } (Content-Type: application/json).
     // ------------------------------
     [HttpPost("register")]
+    [Consumes("application/json")]
     [AllowAnonymous]
     public async Task<ActionResult<AuthResponse>> Register([FromBody] RegisterRequest request)
     {
-        // SECURITY-CRITICAL: Validate model state FIRST
-        // This ensures all required fields including Role are present
-        if (!ModelState.IsValid)
+        if (request == null)
         {
-            return BadRequest(ModelState);
+            return BadRequest(new { message = "Request body is required.", error = "VALIDATION" });
+        }
+
+        // SECURITY-CRITICAL: Validate model state
+        if (string.IsNullOrWhiteSpace(request.FullName))
+        {
+            return BadRequest(new { message = "FullName is required.", error = "VALIDATION" });
+        }
+        if (string.IsNullOrWhiteSpace(request.Email))
+        {
+            return BadRequest(new { message = "Email is required.", error = "VALIDATION" });
+        }
+        if (string.IsNullOrWhiteSpace(request.Password) || request.Password.Length < 6)
+        {
+            return BadRequest(new { message = "Password is required and must be at least 6 characters.", error = "VALIDATION" });
         }
 
         // SECURITY-CRITICAL: Role MUST be explicitly provided (cannot be null)
-        // Using nullable Role in DTO allows us to detect when it's missing from JSON
         if (!request.Role.HasValue)
         {
             return BadRequest(new { 
@@ -194,55 +278,351 @@ public class AuthController : ControllerBase
             });
         }
 
-        return Ok(response);
+        // Set HttpOnly cookie; do not return token in body
+        SetAccessCookie(response.Token);
+        return Ok(new
+        {
+            ok = true,
+            user = response.User,
+            role = response.Role,
+            isSupervisor = response.IsSupervisor,
+            landingPath = response.LandingPath
+        });
     }
 
     // ------------------------------
-    // Login
+    // Login: Company DB (read-only) auth when enabled, then TikQ DB authorization; JWT with role + landingPath.
+    // Body: flat JSON { "email": "...", "password": "..." } (Content-Type: application/json).
     // ------------------------------
     [HttpPost("login")]
+    [Consumes("application/json")]
     [AllowAnonymous]
     public async Task<ActionResult<AuthResponse>> Login([FromBody] LoginRequest request)
     {
-        if (!ModelState.IsValid)
+        if (request == null || string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Password))
         {
-            return BadRequest(ModelState);
+            return BadRequest(new { message = "Email and password are required.", error = "VALIDATION" });
         }
 
-        var response = await _userService.LoginAsync(request);
-        if (response == null)
+        var result = await _userService.LoginAsync(request);
+        switch (result.Kind)
         {
-            return Unauthorized("Invalid email or password.");
+            case LoginResultKind.Forbidden:
+                return StatusCode(403, new { message = "Account is disabled or inactive.", error = "USER_DISABLED" });
+            case LoginResultKind.RoleNotAssigned:
+                return StatusCode(403, new { message = "No TikQ role assigned for this account.", error = "ROLE_NOT_ASSIGNED" });
+            case LoginResultKind.Unauthorized:
+                return Unauthorized(new { message = "Invalid email or password.", error = "INVALID_CREDENTIALS" });
+            case LoginResultKind.Success:
+                var resp = result.Response!;
+                SetAccessCookie(resp.Token);
+                return Ok(new
+                {
+                    ok = true,
+                    role = resp.Role,
+                    isSupervisor = resp.IsSupervisor,
+                    landingPath = resp.LandingPath,
+                    user = resp.User
+                });
+            default:
+                return Unauthorized(new { message = "Invalid email or password.", error = "INVALID_CREDENTIALS" });
         }
-
-        return Ok(response);
     }
 
     // ------------------------------
-    // Me
+    // Emergency login (break-glass admin): only when EmergencyAdmin:Enabled; requires Email + Password + EmergencyKey.
+    // Ensures an Admin user exists in TikQ DB and signs in. No default passwords in Production.
     // ------------------------------
-    [HttpGet("me")]
-    [Authorize]
-    public async Task<ActionResult<UserDto>> Me()
+    [HttpPost("emergency-login")]
+    [Consumes("application/json")]
+    [AllowAnonymous]
+    public async Task<IActionResult> EmergencyLogin([FromBody] EmergencyLoginRequest request)
     {
-        // ما انتظار داریم Claim اصلی، NameIdentifier = User.Id باشد
-        var idValue =
-            User.FindFirstValue(ClaimTypes.NameIdentifier) ??
-            User.FindFirstValue(ClaimTypes.NameIdentifier) ??
-            User.FindFirstValue(ClaimTypes.Email);
-
-        if (!Guid.TryParse(idValue, out var userId))
+        if (!_emergencyAdminOptions.Enabled)
         {
-            return Unauthorized();
+            return NotFound(new { message = "Emergency login is not enabled.", error = "NOT_AVAILABLE" });
         }
 
-        var user = await _userService.GetByIdAsync(userId);
+        if (request == null || string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Password) || string.IsNullOrWhiteSpace(request.EmergencyKey))
+        {
+            return BadRequest(new { message = "Email, Password, and EmergencyKey are required.", error = "VALIDATION" });
+        }
+
+        var opts = _emergencyAdminOptions;
+        if (string.IsNullOrEmpty(opts.Key) || string.IsNullOrEmpty(opts.Password))
+        {
+            return StatusCode(500, new { message = "Emergency admin is not properly configured.", error = "CONFIG" });
+        }
+
+        if (!ConstantTimeEquals(request.EmergencyKey, opts.Key))
+        {
+            return Unauthorized(new { message = "Invalid credentials.", error = "INVALID_CREDENTIALS" });
+        }
+
+        var normalizedEmail = request.Email.Trim().ToLowerInvariant();
+        var configEmail = opts.Email?.Trim().ToLowerInvariant();
+        if (string.IsNullOrEmpty(configEmail) || normalizedEmail != configEmail)
+        {
+            return Unauthorized(new { message = "Invalid credentials.", error = "INVALID_CREDENTIALS" });
+        }
+
+        if (!ConstantTimeEquals(request.Password, opts.Password))
+        {
+            return Unauthorized(new { message = "Invalid credentials.", error = "INVALID_CREDENTIALS" });
+        }
+
+        var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == normalizedEmail);
         if (user == null)
+        {
+            user = new User
+            {
+                Id = Guid.NewGuid(),
+                Email = normalizedEmail,
+                FullName = string.IsNullOrWhiteSpace(opts.FullName) ? (opts.Email ?? normalizedEmail) : opts.FullName.Trim(),
+                Role = UserRole.Admin,
+                PasswordHash = _passwordHasher.HashPassword(new User(), request.Password),
+                CreatedAt = DateTime.UtcNow
+            };
+            _context.Users.Add(user);
+            await _context.SaveChangesAsync();
+        }
+        else
+        {
+            if (user.Role != UserRole.Admin)
+            {
+                user.Role = UserRole.Admin;
+                await _context.SaveChangesAsync();
+            }
+        }
+
+        var userDto = await _userService.GetByEmailAsync(normalizedEmail);
+        if (userDto == null)
+        {
+            return StatusCode(500, new { message = "User resolution failed.", error = "INTERNAL" });
+        }
+
+        var token = _jwtTokenGenerator.GenerateToken(user, false, 30);
+        SetAccessCookie(token);
+        return Ok(new
+        {
+            ok = true,
+            role = "Admin",
+            isSupervisor = false,
+            landingPath = "/admin",
+            user = userDto
+        });
+    }
+
+    private static bool ConstantTimeEquals(string a, string b)
+    {
+        if (a == null && b == null) return true;
+        if (a == null || b == null) return false;
+        var aBytes = System.Text.Encoding.UTF8.GetBytes(a);
+        var bBytes = System.Text.Encoding.UTF8.GetBytes(b);
+        var maxLen = Math.Max(aBytes.Length, bBytes.Length);
+        if (aBytes.Length != bBytes.Length) return false;
+        return CryptographicOperations.FixedTimeEquals(aBytes, bBytes);
+    }
+
+    // ------------------------------
+    // Logout: clear HttpOnly cookie
+    // ------------------------------
+    [HttpPost("logout")]
+    [AllowAnonymous]
+    public IActionResult Logout()
+    {
+        ClearAccessCookie();
+        return Ok(new { ok = true });
+    }
+
+    // ------------------------------
+    // Diag: auth state for debugging (DEV only; 404 in Production)
+    // ------------------------------
+    [HttpGet("diag")]
+    [AllowAnonymous]
+    public IActionResult Diag()
+    {
+        if (!_env.IsDevelopment())
+            return NotFound();
+
+        var authHeader = Request.Headers.Authorization.FirstOrDefault();
+        var hasBearer = !string.IsNullOrEmpty(authHeader) && authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase);
+
+        return Ok(new
+        {
+            windowsAuthEnabled = _windowsAuthOptions.Enabled,
+            hasAuthorizationBearer = hasBearer,
+            isAuthenticated = User?.Identity?.IsAuthenticated ?? false,
+            authenticationType = User?.Identity?.AuthenticationType ?? null,
+            identityName = User?.Identity?.Name ?? null
+        });
+    }
+
+    // ------------------------------
+    // WhoAmI: lightweight session restore (JWT cookie tikq_access or Windows Integrated Auth)
+    // ------------------------------
+    [HttpGet("whoami")]
+    [AllowAnonymous]
+    public async Task<IActionResult> WhoAmI()
+    {
+        if (User?.Identity?.IsAuthenticated != true)
+        {
+            return Ok(new
+            {
+                isAuthenticated = false,
+                email = (string?)null,
+                role = (string?)null,
+                isSupervisor = false,
+                landingPath = "/login"
+            });
+        }
+
+        var email = User.FindFirstValue("email") ?? User.FindFirstValue(ClaimTypes.Email);
+
+        // JWT path: email and role/supervisor from claims
+        if (!string.IsNullOrEmpty(email))
+        {
+            var role = User.FindFirstValue(ClaimTypes.Role) ?? User.FindFirstValue("role");
+            var isSupervisor = string.Equals(
+                User.FindFirstValue("isSupervisor") ?? User.FindFirstValue("is_supervisor"),
+                "true",
+                StringComparison.OrdinalIgnoreCase);
+            var landingPath =
+                string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase) ? "/admin" :
+                (string.Equals(role, "Technician", StringComparison.OrdinalIgnoreCase) && isSupervisor) ? "/supervisor" :
+                string.Equals(role, "Technician", StringComparison.OrdinalIgnoreCase) ? "/technician" :
+                string.Equals(role, "Client", StringComparison.OrdinalIgnoreCase) ? "/client" : null;
+            if (!HasValidRoleAndLandingPath(role, landingPath))
+            {
+                return Ok(new
+                {
+                    isAuthenticated = false,
+                    authError = "missing_role",
+                    email = (string?)null,
+                    role = (string?)null,
+                    isSupervisor = false,
+                    landingPath = "/login"
+                });
+            }
+            return Ok(new
+            {
+                isAuthenticated = true,
+                email,
+                role,
+                isSupervisor,
+                landingPath
+            });
+        }
+
+        // Windows auth path: resolve domain user to email, then role + isSupervisor from TikQ DB
+        var domainUser = User.Identity?.Name;
+        if (string.IsNullOrWhiteSpace(domainUser))
+        {
+            return Ok(new { isAuthenticated = false, email = (string?)null, role = (string?)null, isSupervisor = false, landingPath = "/login" });
+        }
+
+        var resolvedEmail = _windowsUserMapResolver.ResolveEmail(domainUser);
+        if (string.IsNullOrEmpty(resolvedEmail))
+        {
+            return Ok(new { isAuthenticated = false, email = (string?)null, role = (string?)null, isSupervisor = false, landingPath = "/login" });
+        }
+
+        var user = await _userService.GetByEmailAsync(resolvedEmail);
+        if (user == null)
+        {
+            return Ok(new { isAuthenticated = false, email = (string?)null, role = (string?)null, isSupervisor = false, landingPath = "/login" });
+        }
+
+        var winRole = user.Role.ToString();
+        var winLandingPath = !string.IsNullOrWhiteSpace(user.LandingPath) ? user.LandingPath : Ticketing.Backend.Application.Common.LandingPathResolver.GetLandingPath(user.Role, user.IsSupervisor);
+        if (!HasValidRoleAndLandingPath(winRole, winLandingPath))
+        {
+            return Ok(new
+            {
+                isAuthenticated = false,
+                authError = "missing_role",
+                email = (string?)null,
+                role = (string?)null,
+                isSupervisor = false,
+                landingPath = "/login"
+            });
+        }
+        return Ok(new
+        {
+            isAuthenticated = true,
+            email = user.Email,
+            role = winRole,
+            isSupervisor = user.IsSupervisor,
+            landingPath = winLandingPath
+        });
+    }
+
+    // ------------------------------
+    // Me: JWT (NameIdentifier = User.Id) or Windows Integrated Auth (Identity.Name -> map -> email -> user)
+    // When not authenticated, returns 401 with clear error: JWT_REQUIRED or WINDOWS_IDENTITY_MISSING.
+    // ------------------------------
+    [HttpGet("me")]
+    [AllowAnonymous]
+    public async Task<ActionResult<UserDto>> Me()
+    {
+        if (User?.Identity?.IsAuthenticated != true)
+        {
+            if (!_windowsAuthOptions.Enabled)
+                return Unauthorized(new { error = "JWT_REQUIRED", message = "WindowsAuth is disabled; use email/password login to obtain JWT." });
+            return Unauthorized(new { error = "WINDOWS_IDENTITY_MISSING", message = "Windows auth expected but no Windows identity was provided by IIS. Check IIS Windows Authentication settings." });
+        }
+
+        // 1) JWT path: NameIdentifier is GUID
+        var idValue = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (Guid.TryParse(idValue, out var userId))
+        {
+            var user = await _userService.GetByIdAsync(userId);
+            if (user == null)
+                return NotFound();
+            var roleStr = user.Role.ToString();
+            var landingPath = !string.IsNullOrWhiteSpace(user.LandingPath) ? user.LandingPath : Ticketing.Backend.Application.Common.LandingPathResolver.GetLandingPath(user.Role, user.IsSupervisor);
+            if (!HasValidRoleAndLandingPath(roleStr, landingPath))
+                return Unauthorized(new { error = "missing_role", message = "User has no valid role or landing path assigned." });
+            return Ok(user);
+        }
+
+        // 2) Windows path: resolve DOMAIN\username (or user@domain) to email, then find TikQ user
+        var domainUser = User.Identity?.Name;
+        if (string.IsNullOrWhiteSpace(domainUser))
+        {
+            if (!_windowsAuthOptions.Enabled)
+                return Unauthorized(new { error = "JWT_REQUIRED", message = "WindowsAuth is disabled; use email/password login to obtain JWT." });
+            return Unauthorized(new { error = "WINDOWS_IDENTITY_MISSING", message = "Windows auth expected but no Windows identity was provided by IIS. Check IIS Windows Authentication settings." });
+        }
+
+        var samAccountName = domainUser.Contains('\\')
+            ? domainUser.Substring(domainUser.LastIndexOf('\\') + 1)
+            : domainUser.Contains('@')
+                ? domainUser.Substring(0, domainUser.IndexOf('@'))
+                : domainUser;
+
+        var email = _windowsUserMapResolver.ResolveEmail(domainUser);
+        if (string.IsNullOrEmpty(email))
+        {
+            email = await _adUserLookup.GetEmailBySamAccountNameAsync(samAccountName, HttpContext.RequestAborted);
+        }
+
+        if (string.IsNullOrEmpty(email))
+        {
+            return StatusCode(403, new { message = "Could not resolve Windows user to an email (AD lookup and map). Contact administrator.", error = "AD_EMAIL_NOT_FOUND" });
+        }
+
+        var userByEmail = await _userService.GetByEmailAsync(email);
+        if (userByEmail == null)
         {
             return NotFound();
         }
 
-        return Ok(user);
+        var roleStrMe = userByEmail.Role.ToString();
+        var landingPathMe = !string.IsNullOrWhiteSpace(userByEmail.LandingPath) ? userByEmail.LandingPath : Ticketing.Backend.Application.Common.LandingPathResolver.GetLandingPath(userByEmail.Role, userByEmail.IsSupervisor);
+        if (!HasValidRoleAndLandingPath(roleStrMe, landingPathMe))
+            return Unauthorized(new { error = "missing_role", message = "User has no valid role or landing path assigned." });
+        return Ok(userByEmail);
     }
 
     // ------------------------------

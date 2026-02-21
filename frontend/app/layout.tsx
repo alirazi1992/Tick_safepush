@@ -8,6 +8,9 @@ import { AuthProvider } from "@/lib/auth-context"
 import { PreferencesProvider } from "@/lib/preferences-context"
 import { CategoryProvider } from "@/services/useCategories"
 import { initialCategoriesData } from "@/data/initial-categories"
+import { BackendStatusIndicator } from "@/components/backend-status-indicator"
+import { ApiStatusDebug } from "@/components/api-status-debug"
+import { RealtimeProvider } from "@/lib/realtime-context"
 
 const inter = Inter({ subsets: ["latin"] })
 const iranYekan = localFont({
@@ -33,9 +36,15 @@ export default function RootLayout({
       <body className={`${inter.className} ${iranYekan.className} font-iran bg-background text-foreground antialiased`}>
         <ThemeProvider>
           <AuthProvider>
-            <PreferencesProvider>
-              <CategoryProvider initial={initialCategoriesData}>{children}</CategoryProvider>
-            </PreferencesProvider>
+            <RealtimeProvider>
+              <PreferencesProvider>
+                <CategoryProvider initial={initialCategoriesData}>
+                  <BackendStatusIndicator />
+                  <ApiStatusDebug />
+                  {children}
+                </CategoryProvider>
+              </PreferencesProvider>
+            </RealtimeProvider>
           </AuthProvider>
         </ThemeProvider>
       </body>

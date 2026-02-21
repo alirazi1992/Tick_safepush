@@ -1,150 +1,107 @@
-# TIQ - Ticketing System
+# TikQ — Internal Ticketing System
 
-A full-stack ticketing system with Next.js frontend and .NET backend.
+TikQ is an internal help-desk and ticketing application for organizations. It lets employees submit support requests, allows technicians to manage and resolve them, and gives administrators visibility and control over categories, users, and workflows. The system is designed for **intranet deployment** and can integrate with an existing company directory (read-only) for identity while keeping all application data and roles in its own database.
 
-## Project Structure
+---
 
-```
-TIQ/
-├── frontend/          # Next.js frontend application
-├── backend/           # .NET backend API
-│   └── Ticketing.Backend/
-└── Ticketing_FinalVersion-.sln  # .NET solution file
-```
+## Project Overview
 
-## Prerequisites
+**What TikQ is**  
+TikQ is a web-based ticketing system that centralizes support requests, assignment, and resolution. Users open tickets by category; technicians work from assigned queues; admins configure categories, custom fields, and technician assignment rules.
 
-### Frontend
-- Node.js 18+ and npm (or pnpm/yarn)
-- Next.js 14+
+**What problem it solves**  
+It replaces ad-hoc email or spreadsheets with a single place to create tickets, track status, attach files, and see history. Roles and permissions are clear: clients submit, technicians resolve, admins configure. The application can run entirely on the intranet with no dependency on public internet services.
 
-### Backend
-- .NET 8 SDK
-- SQLite (bundled with .NET provider)
+---
 
-## Getting Started
+## System Capabilities
 
-### Frontend
+**Ticket lifecycle**  
+Tickets move from creation through assignment, work, and closure. Supported states include open, in progress, resolved, and closed. Optional priorities and due dates help with triage. Tickets can have file attachments and an activity timeline.
 
-1. Navigate to the frontend directory:
-   ```bash
-   cd frontend
-   ```
+**Roles**  
+- **Client**: Submit tickets, view own tickets, add comments and attachments.  
+- **Technician**: View assigned tickets, update status, add notes, collaborate with other technicians.  
+- **Admin**: Full access to categories, users, technicians, reports, and system settings.  
 
-2. Install dependencies:
-   ```bash
-   npm install
-   # or
-   pnpm install
-   ```
+**Dashboards**  
+Each role has a dedicated dashboard: clients see their requests; technicians see their queue and assignment; admins see overview, reports, and management screens.
 
-3. Create environment file (optional, defaults to `http://localhost:5000`):
-   ```bash
-   # Create frontend/.env.local
-   NEXT_PUBLIC_API_BASE_URL=http://localhost:5000
-   ```
+**Workflows**  
+Admins define categories and subcategories. Optional custom fields (including multi-select) can be attached to subcategories. Ticket assignment can be manual or use automatic rules (e.g. by category or expertise). The system supports optional integration with a company directory for login (Windows or SQL-based); when used, the directory is read-only for identity lookup only.
 
-4. Run the development server:
-   ```bash
-   npm run dev
-   ```
+---
 
-The frontend will be available at `http://localhost:3000`.
+## Architecture Summary
 
-### Backend
+**Backend (.NET)**  
+The API is built with ASP.NET Core. It provides REST endpoints for authentication, tickets, categories, users, technicians, and admin operations. The primary data store is configurable (SQL Server recommended for production; SQLite is available for development). Optional Company Directory integration uses a separate, read-only connection to the organization’s directory database.
 
-1. Navigate to the backend directory:
-   ```bash
-   cd backend/Ticketing.Backend
-   ```
+**Frontend (Next.js)**  
+The web UI is a Next.js application (TypeScript, React). It talks to the backend API via a configurable base URL and uses cookie-based or bearer token authentication.
 
-2. Restore dependencies:
-   ```bash
-   dotnet restore
-   ```
+**TikQ database**  
+All application data—users, roles, tickets, categories, custom fields, assignments—lives in the TikQ database. This is the only database on which the application runs migrations and writes.
 
-3. Run the API:
-   ```bash
-   dotnet run
-   ```
+**Company database (read-only)**  
+When Company Directory is enabled, the application connects to the organization’s existing directory (e.g. “Boss” or “Company” DB) **read-only**. It is used only for identity (e.g. email, display name, active flag) and optional password verification. No schema changes or writes are performed against this database.
 
-The backend API will be available at:
-- HTTP: `http://localhost:5000`
-- HTTPS: `https://localhost:7000`
+---
 
-## Default Test Users
+## Security Model
 
-- **Admin**: `admin@test.com` / `Admin123!`
-- **Technician**: `tech1@test.com` / `Tech123!`
-- **Client**: `client1@test.com` / `Client123!`
+**Authentication**  
+- **JWT**: Primary mechanism; tokens are issued after successful login and can be sent in cookies or headers.  
+- **Cookie**: The frontend can use HTTP-only cookies for the access token when configured.  
+- **Windows / Company Directory**: Optional integration for intranet single sign-on or directory-backed login.  
 
-## Environment Variables
+**Role resolution**  
+Roles (Admin, Technician, Client) and landing paths are stored and resolved **only in the TikQ database**. The Company DB is not used to assign or override roles. If a user has no valid role in TikQ, they receive an error and must be provisioned by an administrator.
 
-### Frontend (`frontend/.env.local`)
+**Read-only Company DB**  
+When Company Directory is enabled, the application enforces read-only use of the directory connection (no INSERT/UPDATE/DELETE/DDL). Database-level read-only permissions for the directory are still the organization’s responsibility.
 
-```env
-NEXT_PUBLIC_API_BASE_URL=http://localhost:5000
-```
+---
 
-### Backend (`backend/Ticketing.Backend/appsettings.json`)
+## Deployment Model
 
-The backend configuration is stored in `appsettings.json`. For production, set the `JWT_SECRET` environment variable.
+**Intranet-first**  
+TikQ is intended for deployment on the organization’s internal network. The backend and frontend can be hosted on internal servers; no outbound dependency on public internet services is required.
 
-## Development
+**Environment configuration**  
+Production deployment requires explicit configuration: JWT secret, production database connection, and—if Company Directory is used—connection string and mode. Debug and maintenance endpoints are disabled in production. See **docs/DEPLOYMENT_REQUIRED_CONFIG.md** for required environment variables, database responsibilities, and failure scenarios.
 
-### Running Both Services
+**No internet dependency**  
+Core operation does not depend on external APIs or third-party SaaS. Optional features (e.g. email) can be configured if the organization chooses.
 
-1. **Terminal 1** - Backend:
-   ```bash
-   cd backend/Ticketing.Backend
-   dotnet run
-   ```
+---
 
-2. **Terminal 2** - Frontend:
-   ```bash
-   cd frontend
-   npm run dev
-   ```
+## Responsibility Boundary
 
-### Building
+**Organization owns**  
+- Deployment and hosting of the TikQ backend and frontend.  
+- Infrastructure: servers, network, HTTPS, and DNS.  
+- Configuration of environment variables and secrets (JWT, connection strings).  
+- User and role provisioning in TikQ (e.g. creating users and assigning roles in the TikQ database).  
+- If Company Directory is used: ensuring the directory database is available and that the connection string and permissions (read-only) are correct.  
 
-**Frontend:**
-```bash
-cd frontend
-npm run build
-```
+**TikQ does not manage**  
+- The Company/Directory database schema or data. TikQ only reads from it when the feature is enabled.  
+- Creation or modification of users in the Company DB; identity is looked up, not provisioned there.  
+- External identity providers beyond the optional Windows/Directory integration and email/password fallback.  
 
-**Backend:**
-```bash
-cd backend/Ticketing.Backend
-dotnet build
-```
+**Roles live in TikQ**  
+All role assignments (Admin, Technician, Client) and application permissions are stored and managed in the TikQ database only.
 
-## Ports
+---
 
-- Frontend: `3000` (default)
-- Backend HTTP: `5000`
-- Backend HTTPS: `7000`
+## Documentation
 
-## Technology Stack
+| Document | Purpose |
+|----------|---------|
+| **docs/DEPLOYMENT_REQUIRED_CONFIG.md** | Required environment variables, database roles, security and deployment options, common failure scenarios, first-run behavior. |
+| **docs/HANDOFF_READINESS_CHECKLIST.md** | Pre-handoff and pre-production checklist. |
+| **docs/HANDOFF_DIFF_SUMMARY.md** | Summary of production-hardening changes. |
+| **docs/HANDOFF_WHAT_COULD_STILL_FAIL.md** | Risks and considerations after handoff. |
 
-### Frontend
-- Next.js 14 (App Router)
-- TypeScript
-- Tailwind CSS
-- Shadcn/ui components
-- React Hook Form
-- Yup validation
-
-### Backend
-- ASP.NET Core 8
-- Entity Framework Core
-- SQLite
-- JWT Authentication
-- Swagger/OpenAPI
-
-## Notes
-
-- The backend database is automatically migrated and seeded on startup
-- CORS is configured to allow requests from `http://localhost:3000`
-- Build artifacts (`.next/`, `node_modules/`, `bin/`, `obj/`) are gitignored
+Development and debugging notes have been archived under **docs/archive/dev-history/** and are not part of the delivery set.

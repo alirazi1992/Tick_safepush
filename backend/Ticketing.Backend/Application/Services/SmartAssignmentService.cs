@@ -53,7 +53,7 @@ public class SmartAssignmentService : ISmartAssignmentService
 
         // Calculate load for each technician (count of open/in-progress tickets)
         var technicianLoads = new List<(Guid TechnicianId, int LoadCount)>();
-        var activeStatuses = new[] { TicketStatus.Submitted, TicketStatus.Viewed, TicketStatus.Open, TicketStatus.InProgress };
+        var activeStatuses = new[] { TicketStatus.Submitted, TicketStatus.SeenRead, TicketStatus.Open, TicketStatus.InProgress, TicketStatus.Redo };
 
         foreach (var tech in eligibleTechnicians)
         {
