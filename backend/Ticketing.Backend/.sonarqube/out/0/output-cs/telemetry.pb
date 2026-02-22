@@ -1,1 +1,0 @@
-zRdC:\Users\user\Desktop\42\TikQ\backend\Ticketing.Backend\src\Ticketing.Domain\Ticketing.Domain.csproj¢net8.0òCSharp12

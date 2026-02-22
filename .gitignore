@@ -53,3 +53,64 @@ Thumbs.db
 # SQLite
 *.db
 App_Data/
+
+# =========================
+# SonarQube / SonarScanner (optional; not required for build/deploy)
+# =========================
+.sonarqube/
+# Allow stub so MSBuild does not look for SonarQube.Integration.targets
+!.sonarqube/bin/
+!.sonarqube/bin/targets/
+!.sonarqube/bin/targets/SonarQube.Integration.targets
+.scannerwork/
+sonarqube/
+**/sonar-project.properties
+**/sonar.properties
+report-task.txt# build caches
+frontend/tsconfig.tsbuildinfo
+
+# local curl cookies (handoff tests)
+backend/Ticketing.Backend/cookies*.txt
+tools/_handoff_tests/cookies-*.txt
+
+# Next.js build output
+.next/
+frontend/.next/
+
+# local logs
+*.log
+
+# local curl cookies anywhere
+cookies*.txt
+
+# local handoff test payloads
+tools/_handoff_tests/login-*.json
+backend/Ticketing.Backend/login*.json
+
+
+# Visual Studio
+.vs/
+
+# SonarQube scanner artifacts
+**/.sonarqube/
+**/.sonar/
+
+# Backup folders / local data dumps
+**/App_Data_BAK_*/
+**/*_BAK_*/
+
+# Build outputs
+bin/
+obj/
+
+
+# Visual Studio
+.vs/
+
+# SonarQube scanner artifacts
+**/.sonarqube/
+
+# Build outputs
+bin/
+obj/
+

@@ -1,1 +1,0 @@
-ŠRtC:\Users\user\Desktop\42\TikQ\backend\Ticketing.Backend\src\Ticketing.Infrastructure\Ticketing.Infrastructure.csproj¢net8.0òCSharp12

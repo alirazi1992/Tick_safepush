@@ -1,1 +1,0 @@
-„RnC:\Users\user\Desktop\42\TikQ\backend\Ticketing.Backend\src\Ticketing.Application\Ticketing.Application.csproj¢net8.0òCSharp12
