@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Ticketing.Backend.Application.Repositories;
 using Ticketing.Backend.Domain.Entities;
+using Ticketing.Backend.Domain.Enums;
 using Ticketing.Backend.Infrastructure.Data;
 
 namespace Ticketing.Backend.Infrastructure.Data.Repositories;
@@ -40,6 +41,15 @@ public class UserRepository : IUserRepository
         return await _context.Users
             .AsNoTracking()
             .Where(u => u.Role.ToString() == role)
+            .OrderBy(u => u.FullName)
+            .ToListAsync();
+    }
+
+    public async Task<IEnumerable<User>> GetByRoleAsync(UserRole role)
+    {
+        return await _context.Users
+            .AsNoTracking()
+            .Where(u => u.Role == role)
             .OrderBy(u => u.FullName)
             .ToListAsync();
     }

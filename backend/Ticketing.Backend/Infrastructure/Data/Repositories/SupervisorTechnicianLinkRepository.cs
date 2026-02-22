@@ -55,5 +55,15 @@ public class SupervisorTechnicianLinkRepository : ISupervisorTechnicianLinkRepos
         await _context.SaveChangesAsync();
         return true;
     }
+
+    public async Task<int> GetTotalCountAsync()
+    {
+        return await _context.SupervisorTechnicianLinks.CountAsync();
+    }
+
+    public async Task<int> GetCountForSupervisorAsync(Guid supervisorUserId)
+    {
+        return await _context.SupervisorTechnicianLinks.CountAsync(l => l.SupervisorUserId == supervisorUserId);
+    }
 }
 

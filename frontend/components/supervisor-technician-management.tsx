@@ -57,16 +57,24 @@ export function SupervisorTechnicianManagement() {
     try {
       setLoading(true)
       setLoadError(null)
-      const data = await getSupervisorTechnicians(token)
-      setItems(data)
+      const raw = await getSupervisorTechnicians(token)
+      if (process.env.NODE_ENV === "development") {
+        const lastUrl = typeof window !== "undefined" ? (window as { __lastApiRequestUrl?: string }).__lastApiRequestUrl : undefined
+        console.warn("[SUPERVISOR_DEV] GET /api/supervisor/technicians resolved URL:", lastUrl, "raw:", typeof raw, Array.isArray(raw) ? `array[${(raw as unknown[]).length}]` : "", JSON.stringify(raw).slice(0, 400))
+      }
+      const data = Array.isArray(raw) ? raw : (raw as { items?: unknown[]; data?: unknown[] })?.items ?? (raw as { items?: unknown[]; data?: unknown[] })?.data ?? []
+      const list = Array.isArray(data) ? data : []
+      setItems(list as ApiSupervisorTechnicianWorkloadDto[])
+      if (process.env.NODE_ENV === "development") {
+        console.warn("[SUPERVISOR_DEV] GET /api/supervisor/technicians normalized length:", list.length)
+      }
     } catch (err: any) {
-      // Format error message with status code
+      if (process.env.NODE_ENV === "development") {
+        console.warn("[SUPERVISOR_DEV] GET /api/supervisor/technicians failed HTTP status:", err?.status, err?.statusText, err?.message)
+      }
       const statusInfo = err?.status ? ` (${err.status} ${err.statusText || ""})` : ""
       const errorMsg = err?.message || "لطفاً دوباره تلاش کنید"
-      
       setLoadError(`خطا در بارگذاری تکنسین‌ها${statusInfo}: ${errorMsg}`)
-      
-      // Only show toast for non-404 errors (404 means endpoint doesn't exist)
       if (err?.status !== 404) {
         toast({
           title: "خطا در بارگذاری تکنسین‌ها",
@@ -115,15 +123,25 @@ export function SupervisorTechnicianManagement() {
     try {
       setLinkLoading(true)
       setAvailableTechsError(null)
-      const data = await getSupervisorAvailableTechnicians(token)
-      setAvailableTechs(data)
+      const raw = await getSupervisorAvailableTechnicians(token)
+      if (process.env.NODE_ENV === "development") {
+        const lastUrl = typeof window !== "undefined" ? (window as { __lastApiRequestUrl?: string }).__lastApiRequestUrl : undefined
+        console.warn("[SUPERVISOR_DEV] GET /api/supervisor/technicians/available resolved URL:", lastUrl, "raw:", typeof raw, Array.isArray(raw) ? `array[${(raw as unknown[]).length}]` : "", JSON.stringify(raw).slice(0, 400))
+      }
+      // Normalize: Array | { items: Array } | { data: Array }
+      const data = Array.isArray(raw) ? raw : (raw as { items?: unknown[]; data?: unknown[] })?.items ?? (raw as { items?: unknown[]; data?: unknown[] })?.data ?? []
+      const list = Array.isArray(data) ? data : []
+      setAvailableTechs(list as ApiTechnicianResponse[])
+      if (process.env.NODE_ENV === "development") {
+        console.warn("[SUPERVISOR_DEV] GET /api/supervisor/technicians/available normalized length:", list.length)
+      }
     } catch (err: any) {
+      if (process.env.NODE_ENV === "development") {
+        console.warn("[SUPERVISOR_DEV] GET /api/supervisor/technicians/available failed HTTP status:", err?.status, err?.statusText, err?.message)
+      }
       const statusInfo = err?.status ? ` (${err.status} ${err.statusText || ""})` : ""
       const errorMsg = `خطا در بارگذاری تکنسین‌های قابل انتخاب${statusInfo}: ${err?.message || "لطفاً دوباره تلاش کنید"}`
-      
       setAvailableTechsError(errorMsg)
-      
-      // Only show toast for non-404 errors
       if (err?.status !== 404) {
         toast({
           title: "خطا در بارگذاری تکنسین‌های قابل انتخاب",
@@ -136,9 +154,9 @@ export function SupervisorTechnicianManagement() {
     }
   }
 
-  // Load list once when token becomes available
+  // Load list once when session is ready (user set via cookie auth; token may be null)
   useEffect(() => {
-    if (token && !hasLoadedRef.current) {
+    if (user && !hasLoadedRef.current) {
       hasLoadedRef.current = true
       if (canUseSupervisorEndpoints) {
         void loadList()
@@ -146,14 +164,14 @@ export function SupervisorTechnicianManagement() {
         setLoadError("دسترسی فقط برای سرپرست یا مدیر سیستم مجاز است.")
       }
     }
-  }, [token, canUseSupervisorEndpoints])
+  }, [user, canUseSupervisorEndpoints])
 
   // Load available techs only when dialog opens
   useEffect(() => {
-    if (linkOpen && token && canUseSupervisorEndpoints) {
+    if (linkOpen && user && canUseSupervisorEndpoints) {
       void loadAvailableTechs()
     }
-  }, [linkOpen, token, canUseSupervisorEndpoints])
+  }, [linkOpen, user, canUseSupervisorEndpoints])
 
   const handleOpenDetail = async (tech: ApiSupervisorTechnicianWorkloadDto) => {
     setSelectedTech(tech)
@@ -262,15 +280,19 @@ export function SupervisorTechnicianManagement() {
       });
       
       console.log("[handleDownloadReport] Report downloaded successfully:", filename);
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      const status = (err as { status?: number })?.status;
+      const statusText = (err as { statusText?: string })?.statusText;
       console.error("[handleDownloadReport] Failed to download report:", {
-        error: err?.message,
+        message,
+        status,
+        statusText,
         technicianUserId: selectedTech?.technicianUserId,
       });
-      
       toast({
         title: "خطا در دریافت گزارش",
-        description: err?.message || "لطفاً دوباره تلاش کنید",
+        description: message || "لطفاً دوباره تلاش کنید",
         variant: "destructive",
       });
     } finally {
@@ -281,9 +303,11 @@ export function SupervisorTechnicianManagement() {
   const handleLinkTechnician = async (technicianUserId: string) => {
     if (!user) return
     try {
+      // POST /api/supervisor/technicians/{technicianUserId}/link must use user id, not technician entity id
       await linkSupervisorTechnician(token, technicianUserId)
       toast({ title: "تکنسین اضافه شد" })
       await loadList()
+      await loadAvailableTechs()
       setLinkOpen(false)
     } catch (err: any) {
       toast({
@@ -318,6 +342,12 @@ export function SupervisorTechnicianManagement() {
     return new Set(items.map((tech) => tech.technicianUserId))
   }, [items])
 
+  /** Use for any date display; avoids rendering DateTime.MinValue from backend. */
+  const formatOptionalDate = (value: string | undefined | null): string => {
+    if (value == null || value === "" || value.startsWith("0001-01-01")) return "—"
+    return value
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -349,9 +379,9 @@ export function SupervisorTechnicianManagement() {
           </div>
         ) : items.length === 0 ? (
           <div className="text-center space-y-3">
-            <div className="text-muted-foreground">تکنسینی یافت نشد</div>
+            <div className="text-muted-foreground">تکنسینی تحت مدیریت شما نیست. با «افزودن تکنسین» تکنسین‌های قابل واگذاری را لینک کنید.</div>
             <Button variant="outline" onClick={() => setLinkOpen(true)}>
-              افزودن اولین تکنسین
+              افزودن تکنسین
             </Button>
           </div>
         ) : (
@@ -399,7 +429,9 @@ export function SupervisorTechnicianManagement() {
               </Button>
             </div>
           ) : items.length === 0 ? (
-            <div className="text-sm text-muted-foreground">تکنسینی یافت نشد.</div>
+            <div className="space-y-1">
+              <div className="text-sm text-muted-foreground">تکنسینی تحت مدیریت شما نیست. از «افزودن تکنسین» برای لینک کردن تکنسین‌ها استفاده کنید.</div>
+            </div>
           ) : (
             <Table>
               <TableHeader>
@@ -609,7 +641,9 @@ export function SupervisorTechnicianManagement() {
               </Button>
             </div>
           ) : availableTechs.length === 0 ? (
-            <div className="text-sm text-muted-foreground">تکنسینی برای افزودن یافت نشد.</div>
+            <div className="space-y-1">
+              <div className="text-sm text-muted-foreground">همهٔ تکنسین‌های فعال قبلاً به شما لینک شده‌اند یا در سیستم تکنسینی با نقش «تکنسین» وجود ندارد. از بخش مدیریت کاربران (ادمین) تکنسین اضافه کنید.</div>
+            </div>
           ) : (
             <Table>
               <TableHeader>
@@ -621,18 +655,39 @@ export function SupervisorTechnicianManagement() {
               </TableHeader>
               <TableBody>
                 {availableTechs
-                  .filter((tech) => !linkedTechnicianIds.has(tech.userId ?? tech.id))
-                  .map((tech) => (
-                  <TableRow key={tech.userId ?? tech.id}>
-                    <TableCell>{tech.fullName}</TableCell>
-                    <TableCell>{tech.email}</TableCell>
-                    <TableCell>
-                      <Button size="sm" onClick={() => handleLinkTechnician(tech.userId ?? tech.id)}>
-                        افزودن
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                  .filter((tech) => {
+                    const uid = (tech as ApiTechnicianResponse & { technicianUserId?: string }).userId ?? (tech as ApiTechnicianResponse & { technicianUserId?: string }).technicianUserId ?? tech.id
+                    return !linkedTechnicianIds.has(uid)
+                  })
+                  .map((tech) => {
+                    const selectedTechnicianUserId =
+                      (tech as ApiTechnicianResponse & { technicianUserId?: string }).userId ??
+                      (tech as ApiTechnicianResponse & { technicianUserId?: string }).technicianUserId ??
+                      tech.id
+                    const displayName =
+                      (tech as ApiTechnicianResponse & { technicianName?: string }).fullName ??
+                      (tech as ApiTechnicianResponse & { technicianName?: string }).technicianName ??
+                      (tech as ApiTechnicianResponse).email ??
+                      "(unknown)"
+                    if (process.env.NODE_ENV === "development" && !(tech as { userId?: string | null }).userId) {
+                      console.warn("[SUPERVISOR_DEV] Available technician missing userId; using fallback:", {
+                        id: tech.id,
+                        fullName: (tech as ApiTechnicianResponse).fullName,
+                        selectedTechnicianUserId,
+                      })
+                    }
+                    return (
+                      <TableRow key={String(selectedTechnicianUserId)}>
+                        <TableCell>{displayName}</TableCell>
+                        <TableCell>{(tech as ApiTechnicianResponse).email ?? ""}</TableCell>
+                        <TableCell>
+                          <Button size="sm" onClick={() => handleLinkTechnician(selectedTechnicianUserId)}>
+                            افزودن
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
               </TableBody>
             </Table>
           )}

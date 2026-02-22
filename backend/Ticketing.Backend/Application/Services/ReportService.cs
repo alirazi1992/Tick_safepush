@@ -611,11 +611,11 @@ public class ReportService : IReportService
 
         var technicianUsersQuery = _context.Users
             .AsNoTracking()
-            .Where(u => u.Role == UserRole.Technician);
+            .Where(u => u.Role == UserRole.Technician || u.Role == UserRole.Supervisor);
         if (userId.HasValue)
             technicianUsersQuery = technicianUsersQuery.Where(u => u.Id == userId.Value);
         var technicianUsers = await technicianUsersQuery
-            .Select(u => new { u.Id, u.FullName, u.Email })
+            .Select(u => new { u.Id, u.FullName, u.Email, u.Role })
             .ToListAsync();
 
         var techIds = technicianUsers.Select(u => u.Id).ToList();
@@ -688,7 +688,8 @@ public class ReportService : IReportService
         var users = new List<TechnicianWorkReportUserDto>();
         foreach (var u in technicianUsers)
         {
-            var isSupervisor = techByUserId.TryGetValue(u.Id, out var tech) && tech.IsSupervisor;
+            var isSupervisor = u.Role == UserRole.Supervisor
+                || (techByUserId.TryGetValue(u.Id, out var tech) && tech.IsSupervisor);
 
             var ownedTickets = allTicketsForCounts.Where(t => t.AssignedToUserId == u.Id).ToList();
             var ticketsOwned = ownedTickets.Count;

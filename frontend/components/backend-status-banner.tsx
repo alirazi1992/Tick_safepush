@@ -5,6 +5,7 @@ import { AlertTriangle, CheckCircle, RefreshCw, XCircle, Database } from "lucide
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { getApiBaseUrl } from "@/lib/api-client";
+import { apiFetch } from "@/lib/api";
 
 interface HealthResponse {
   ok: boolean;
@@ -47,7 +48,7 @@ export function BackendStatusBanner() {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-      const response = await fetch(`${baseUrl}/api/health`, {
+      const response = await apiFetch("/api/health", {
         method: "GET",
         signal: controller.signal,
         cache: "no-store",

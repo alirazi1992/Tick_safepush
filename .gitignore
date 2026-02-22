@@ -114,3 +114,17 @@ obj/
 bin/
 obj/
 
+# local / machine-specific
+backend/Ticketing.Backend/appsettings.Development.json
+
+# temp / experiments
+frontend/lib/api.ts
+
+# local-only test scripts (enable later if sanitized)
+tools/test-handoff-users.ps1
+tools/verify-get-ticket.ps1
+tools/verify-supervisor-techs.ps1
+
+# --- local/dev-only (do not ship) ---
+backend/Ticketing.Backend/appsettings.Development.json
+frontend/lib/api.ts

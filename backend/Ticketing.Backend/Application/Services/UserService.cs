@@ -219,11 +219,13 @@ public class UserService : IUserService
 
         var isSup = await ResolveIsSupervisorAsync(tikqUser.Id);
         var roleStr = string.IsNullOrWhiteSpace(tikqUser.Role.ToString()) ? "Client" : tikqUser.Role.ToString();
+        // Deterministic: Admin -> /admin; Technician+isSupervisor -> /supervisor; Technician -> /technician; else -> /client
         var path = LandingPathResolver.GetLandingPath(tikqUser.Role, isSup);
         if (!ValidRoleAndLandingPath(roleStr, path))
             return new LoginResult { Kind = LoginResultKind.RoleNotAssigned };
 
         var dto = await MapToDtoAsync(tikqUser);
+        dto.LandingPath = path; // ensure user object has same path as response (single source of truth)
         var jwt = _jwtTokenGenerator.GenerateToken(tikqUser, isSup, 30);
         return new LoginResult
         {

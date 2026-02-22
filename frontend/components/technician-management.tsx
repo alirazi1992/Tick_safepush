@@ -35,7 +35,7 @@ import {
   deleteTechnician,
 } from "@/lib/technicians-api"
 import type { ApiTechnicianResponse } from "@/lib/api-types"
-import { getAllCategories, getSubcategories } from "@/lib/categories-api"
+import { apiRequest } from "@/lib/api-client"
 import type { ApiCategoryResponse, ApiSubcategoryResponse } from "@/lib/api-types"
 import {
   Select,
@@ -87,10 +87,8 @@ export function TechnicianManagement() {
   const [loadingCategories, setLoadingCategories] = useState(false)
 
   useEffect(() => {
-    if (token) {
-      loadTechnicians()
-      loadCategories()
-    }
+    loadCategories()
+    if (token) loadTechnicians()
   }, [token, categoryContext])
 
   useEffect(() => {
@@ -108,7 +106,7 @@ export function TechnicianManagement() {
   }, [page, token])
 
   useEffect(() => {
-    if (token && selectedCategoryId) {
+    if (selectedCategoryId != null) {
       loadSubcategories(selectedCategoryId)
     } else {
       setSubcategories([])
@@ -117,11 +115,36 @@ export function TechnicianManagement() {
   }, [token, selectedCategoryId])
 
   const loadCategories = async () => {
-    if (!user) return
     setLoadingCategories(true)
     try {
-      const data = await getAllCategories(token)
-      setCategories(data)
+      const raw = await apiRequest<unknown>("/api/categories", {
+        method: "GET",
+        token: token ?? undefined,
+      })
+      const rawList = Array.isArray(raw)
+        ? raw
+        : (raw as { items?: unknown[]; data?: unknown[] })?.items ??
+          (raw as { items?: unknown[]; data?: unknown[] })?.data ??
+          []
+      const normalize = (c: Record<string, unknown>): ApiCategoryResponse => ({
+        id: (c.id as number) ?? (c.Id as number),
+        name: (c.name as string) ?? (c.Name as string) ?? "",
+        isActive: (c.isActive as boolean) ?? (c.IsActive as boolean) ?? true,
+        description: (c.description as string | null) ?? (c.Description as string | null) ?? null,
+        subcategories: Array.isArray(c.subcategories ?? c.Subcategories)
+          ? ((c.subcategories ?? c.Subcategories) as Record<string, unknown>[]).map((s) => ({
+              id: (s.id as number) ?? (s.Id as number),
+              categoryId: (s.categoryId as number) ?? (s.CategoryId as number),
+              name: (s.name as string) ?? (s.Name as string) ?? "",
+              isActive: (s.isActive as boolean) ?? (s.IsActive as boolean) ?? true,
+              description: (s.description as string | null) ?? (s.Description as string | null) ?? null,
+            }))
+          : [],
+      })
+      const normalized = rawList
+        .filter((x): x is Record<string, unknown> => x != null && typeof x === "object")
+        .map(normalize)
+      setCategories(normalized)
     } catch (error: any) {
       console.error("Failed to load categories:", error)
       toast({
@@ -135,10 +158,27 @@ export function TechnicianManagement() {
   }
 
   const loadSubcategories = async (categoryId: number) => {
-    if (!user) return
     try {
-      const subs = await getSubcategories(token, categoryId)
-      setSubcategories(subs)
+      const raw = await apiRequest<unknown>(
+        `/api/categories/${categoryId}/subcategories`,
+        { method: "GET", token: token ?? undefined }
+      )
+      const rawList = Array.isArray(raw)
+        ? raw
+        : (raw as { items?: unknown[]; data?: unknown[] })?.items ??
+          (raw as { items?: unknown[]; data?: unknown[] })?.data ??
+          []
+      const normalizeSub = (s: Record<string, unknown>): ApiSubcategoryResponse => ({
+        id: (s.id as number) ?? (s.Id as number),
+        categoryId: (s.categoryId as number) ?? (s.CategoryId as number) ?? categoryId,
+        name: (s.name as string) ?? (s.Name as string) ?? "",
+        isActive: (s.isActive as boolean) ?? (s.IsActive as boolean) ?? true,
+        description: (s.description as string | null) ?? (s.Description as string | null) ?? null,
+      })
+      const normalized = rawList
+        .filter((x): x is Record<string, unknown> => x != null && typeof x === "object")
+        .map(normalizeSub)
+      setSubcategories(normalized)
     } catch (error: any) {
       console.error("Failed to load subcategories:", error)
       toast({

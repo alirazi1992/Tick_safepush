@@ -11,6 +11,15 @@ public class SupervisorTechnicianListItemDto
     public int WorkloadPercent { get; set; }
 }
 
+/// <summary>Dev-only diagnostic for supervisor technician lists.</summary>
+public class SupervisorTechniciansDiagnosticDto
+{
+    public int ActiveTechCount { get; set; }
+    public int LinkedCount { get; set; }
+    public List<string> SampleActiveTechEmails { get; set; } = new();
+    public List<Guid> SampleLinkedTechIds { get; set; } = new();
+}
+
 public class SupervisorTechnicianSummaryDto
 {
     public Guid TechnicianUserId { get; set; }

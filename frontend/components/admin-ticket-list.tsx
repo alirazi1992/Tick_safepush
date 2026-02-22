@@ -40,6 +40,8 @@ import {
   TICKET_STATUS_LABELS,
   TICKET_STATUS_OPTIONS,
   getTicketStatusLabel,
+  getStatusOptionsForRole,
+  statusForUi,
   type TicketStatus,
 } from "@/lib/ticket-status"
 import { apiRequest } from "@/lib/api-client"
@@ -235,15 +237,15 @@ export function AdminTicketList({ tickets, onTicketUpdate, authToken }: AdminTic
   const [selectedTechnicians, setSelectedTechnicians] = useState<string[]>([])
   const [autoAssigning, setAutoAssigning] = useState<Record<string, boolean>>({})
 
-  // Filter tickets based on search and filters
+  // Filter tickets: use statusForUi so dropdown (API enum values) matches API response
   const filteredTickets = tickets.filter((ticket) => {
     const matchesSearch =
-      ticket.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      ticket.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      ticket.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      ticket.clientName.toLowerCase().includes(searchQuery.toLowerCase())
+      (ticket.title ?? "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (ticket.description ?? "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (ticket.id ?? "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (ticket.clientName ?? "").toLowerCase().includes(searchQuery.toLowerCase())
 
-    const matchesStatus = filterStatus === "all" || (ticket.displayStatus ?? ticket.status) === filterStatus
+    const matchesStatus = filterStatus === "all" || statusForUi(ticket) === filterStatus
     const matchesPriority = filterPriority === "all" || ticket.priority === filterPriority
     const matchesCategory = filterCategory === "all" || ticket.category === filterCategory
 
@@ -302,17 +304,17 @@ export function AdminTicketList({ tickets, onTicketUpdate, authToken }: AdminTic
     setSelectedTicket(ticket)
     setReplyMessage("")
     setPreviewMessages(null)
-    setReplyStatus((ticket.displayStatus ?? ticket.status) as TicketStatus ?? "Open")
+    setReplyStatus((statusForUi(ticket) as TicketStatus) || "Open")
     setViewDialogOpen(true)
   }
 
-  // Fetch full conversation when preview dialog opens (all messages, all roles)
+  // Fetch full conversation when preview dialog opens (cookie or token auth)
   useEffect(() => {
-    if (!viewDialogOpen || !selectedTicket?.id || !authToken) return
+    if (!viewDialogOpen || !selectedTicket?.id) return
     setPreviewMessagesLoading(true)
     apiRequest<ApiTicketMessageDto[]>(`/api/tickets/${selectedTicket.id}/messages`, {
       method: "GET",
-      token: authToken,
+      token: authToken ?? undefined,
     })
       .then((list) => setPreviewMessages(list ?? []))
       .catch(() => setPreviewMessages([]))
@@ -418,14 +420,6 @@ export function AdminTicketList({ tickets, onTicketUpdate, authToken }: AdminTic
 
   const handleReplySubmit = async () => {
     if (!selectedTicket?.id) return
-    if (!authToken) {
-      toast({
-        title: "عدم دسترسی",
-        description: "لطفاً دوباره وارد شوید.",
-        variant: "destructive",
-      })
-      return
-    }
     if (!replyMessage.trim()) {
       toast({
         title: "پیام خالی است",
@@ -437,21 +431,29 @@ export function AdminTicketList({ tickets, onTicketUpdate, authToken }: AdminTic
 
     try {
       setReplySubmitting(true)
+      // POST message with status (API enum: Open/InProgress/Solved etc.). credentials: "include" in api-client for cookie auth.
       await apiRequest(`/api/tickets/${selectedTicket.id}/messages`, {
         method: "POST",
-        token: authToken,
+        token: authToken ?? undefined,
         body: {
           message: replyMessage.trim(),
           status: mapUiStatusToApi(replyStatus),
         },
       })
+      // Re-fetch ticket so UI shows updated status immediately
+      const refreshed = await apiRequest<Record<string, unknown>>(`/api/tickets/${selectedTicket.id}`, {
+        method: "GET",
+        token: authToken ?? undefined,
+      })
+      const newStatus = (refreshed?.displayStatus ?? refreshed?.status ?? replyStatus) as TicketStatus
+      onTicketUpdate(selectedTicket.id, { displayStatus: newStatus, status: newStatus })
       setSelectedTicket((prev: any) =>
-        prev ? { ...prev, status: replyStatus, updatedAt: new Date().toISOString() } : prev
+        prev ? { ...prev, displayStatus: newStatus, status: newStatus, updatedAt: refreshed?.updatedAt ?? new Date().toISOString() } : prev
       )
       setReplyMessage("")
       const list = await apiRequest<ApiTicketMessageDto[]>(`/api/tickets/${selectedTicket.id}/messages`, {
         method: "GET",
-        token: authToken,
+        token: authToken ?? undefined,
       })
       setPreviewMessages(list ?? [])
       toast({
@@ -459,10 +461,11 @@ export function AdminTicketList({ tickets, onTicketUpdate, authToken }: AdminTic
         description: "پاسخ و وضعیت با موفقیت ثبت شد.",
       })
     } catch (error: any) {
-      const message = error?.body?.message || error?.message || "لطفاً دوباره تلاش کنید."
+      const body = error?.body && typeof error.body === "object" ? (error.body as Record<string, unknown>) : null
+      const message = body?.message ?? body?.detail ?? error?.message ?? "لطفاً دوباره تلاش کنید."
       toast({
         title: "ارسال پاسخ ناموفق بود",
-        description: message,
+        description: String(message),
         variant: "destructive",
       })
     } finally {
@@ -472,15 +475,8 @@ export function AdminTicketList({ tickets, onTicketUpdate, authToken }: AdminTic
 
   const handleStatusUpdate = async () => {
     if (!selectedTicket?.id) return
-    if (!authToken) {
-      toast({
-        title: "عدم دسترسی",
-        description: "لطفاً دوباره وارد شوید.",
-        variant: "destructive",
-      })
-      return
-    }
-    if (replyStatus === selectedTicket.status) {
+    const currentStatus = statusForUi(selectedTicket)
+    if (replyStatus === currentStatus) {
       toast({
         title: "بدون تغییر",
         description: "وضعیت جدید با وضعیت فعلی یکسان است.",
@@ -488,24 +484,32 @@ export function AdminTicketList({ tickets, onTicketUpdate, authToken }: AdminTic
       return
     }
     try {
+      // PATCH ticket with API enum (Open/InProgress/Solved etc.). credentials: "include" in api-client for cookie auth.
       await apiRequest(`/api/tickets/${selectedTicket.id}`, {
         method: "PATCH",
-        token: authToken,
+        token: authToken ?? undefined,
         body: { status: mapUiStatusToApi(replyStatus) },
       })
-      onTicketUpdate(selectedTicket.id, { status: replyStatus })
+      // Re-fetch ticket so UI shows updated status immediately
+      const updated = await apiRequest<Record<string, unknown>>(`/api/tickets/${selectedTicket.id}`, {
+        method: "GET",
+        token: authToken ?? undefined,
+      })
+      const newStatus = (updated?.displayStatus ?? updated?.status ?? replyStatus) as TicketStatus
+      onTicketUpdate(selectedTicket.id, { displayStatus: newStatus, status: newStatus })
       setSelectedTicket((prev: any) =>
-        prev ? { ...prev, status: replyStatus, updatedAt: new Date().toISOString() } : prev
+        prev ? { ...prev, displayStatus: newStatus, status: newStatus, updatedAt: updated?.updatedAt ?? new Date().toISOString() } : prev
       )
       toast({
         title: "وضعیت ثبت شد",
         description: "وضعیت تیکت با موفقیت به‌روزرسانی شد.",
       })
     } catch (error: any) {
-      const message = error?.body?.message || error?.message || "لطفاً دوباره تلاش کنید."
+      const body = error?.body && typeof error.body === "object" ? (error.body as Record<string, unknown>) : null
+      const message = body?.message ?? body?.detail ?? error?.message ?? "لطفاً دوباره تلاش کنید."
       toast({
         title: "ثبت وضعیت ناموفق بود",
-        description: message,
+        description: String(message),
         variant: "destructive",
       })
     }
@@ -763,10 +767,11 @@ export function AdminTicketList({ tickets, onTicketUpdate, authToken }: AdminTic
               </SelectTrigger>
               <SelectContent className="font-iran">
                 <SelectItem value="all">همه وضعیت‌ها</SelectItem>
-                <SelectItem value="open">باز</SelectItem>
-                <SelectItem value="in-progress">در حال انجام</SelectItem>
-                <SelectItem value="resolved">حل شده</SelectItem>
-                <SelectItem value="closed">بسته</SelectItem>
+                {getStatusOptionsForRole("admin").map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
 
@@ -893,8 +898,8 @@ export function AdminTicketList({ tickets, onTicketUpdate, authToken }: AdminTic
                           </div>
                         </TableCell>
                         <TableCell>
-                          <Badge className={`${statusColors[ticket.displayStatus ?? ticket.status]} font-iran`}>
-                            {getTicketStatusLabel(ticket.displayStatus ?? ticket.status, "admin")}
+                          <Badge className={`${statusColors[statusForUi(ticket)] ?? statusColors.Open} font-iran`}>
+                            {getTicketStatusLabel(statusForUi(ticket), "admin")}
                           </Badge>
                         </TableCell>
                         <TableCell>
@@ -1000,13 +1005,13 @@ export function AdminTicketList({ tickets, onTicketUpdate, authToken }: AdminTic
                     <h2 className="text-2xl font-bold font-iran text-gray-900">{selectedTicket.title}</h2>
                     <div className="flex gap-3 items-center">
                       <Badge
-                        className={`${statusColors[selectedTicket.status] ?? statusColors.Open} font-iran text-sm px-3 py-1`}
+                        className={`${statusColors[statusForUi(selectedTicket)] ?? statusColors.Open} font-iran text-sm px-3 py-1`}
                       >
                         {React.createElement(
-                          statusIcons[selectedTicket.status] ?? AlertCircle,
+                          statusIcons[statusForUi(selectedTicket)] ?? AlertCircle,
                           { className: "w-4 h-4 ml-1" }
                         )}
-                        {getTicketStatusLabel(selectedTicket.status, "admin")}
+                        {getTicketStatusLabel(statusForUi(selectedTicket), "admin")}
                       </Badge>
                       <Badge className={`${priorityColors[selectedTicket.priority]} font-iran text-sm px-3 py-1`}>
                         {priorityLabels[selectedTicket.priority]}

@@ -9,5 +9,7 @@ public interface ISupervisorTechnicianLinkRepository
     Task<bool> IsLinkedAsync(Guid supervisorUserId, Guid technicianUserId);
     Task<SupervisorTechnicianLink> AddAsync(SupervisorTechnicianLink link);
     Task<bool> RemoveAsync(Guid supervisorUserId, Guid technicianUserId);
+    Task<int> GetTotalCountAsync();
+    Task<int> GetCountForSupervisorAsync(Guid supervisorUserId);
 }
 

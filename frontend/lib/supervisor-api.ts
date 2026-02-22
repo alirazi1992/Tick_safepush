@@ -1,4 +1,5 @@
 import { apiRequest } from "./api-client"
+import { apiFetch } from "./api"
 import type {
   ApiSupervisorTechnicianWorkloadDto,
   ApiSupervisorTechnicianSummaryDto,
@@ -100,31 +101,31 @@ export async function removeSupervisorAssignment(
 }
 
 export async function getSupervisorTechnicianReport(
-  token: string,
+  token: string | null,
   technicianUserId: string
 ): Promise<Blob> {
-  // Use apiRequest to get proper base URL and error handling
-  const { getApiBaseUrl } = await import("./api-client");
-  const baseUrl = await getApiBaseUrl();
-  const url = `${baseUrl.replace(/\/$/, "")}/api/supervisor/technicians/${technicianUserId}/report?format=csv`;
-  
-  const response = await fetch(url, {
+  const path = `/api/supervisor/technicians/${technicianUserId}/report?format=csv`;
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  const response = await apiFetch(path, {
     method: "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
+    headers,
   });
 
   if (!response.ok) {
     let errorMessage = "Failed to download report";
     try {
       const errorData = await response.json();
-      errorMessage = errorData.message || errorMessage;
+      errorMessage = errorData.message || errorData.detail || errorMessage;
     } catch {
       errorMessage = `${errorMessage} (${response.status} ${response.statusText})`;
     }
-    throw new Error(errorMessage);
+    const err = new Error(errorMessage) as Error & { status?: number; statusText?: string };
+    err.status = response.status;
+    err.statusText = response.statusText;
+    throw err;
   }
 
   return await response.blob();

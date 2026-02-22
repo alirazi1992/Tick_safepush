@@ -118,6 +118,38 @@ export function getTicketStatusColor(status: TicketStatus, role?: UserRole): str
   }
 }
 
+/** Canonical API status values for filtering and comparison. */
+const API_STATUS_VALUES: TicketStatus[] = [
+  "Submitted",
+  "SeenRead",
+  "Open",
+  "InProgress",
+  "Solved",
+  "Redo",
+]
+
+/**
+ * Normalize ticket to a single status value for admin filtering and display.
+ * Use this so filter dropdown (API enum values) matches ticket.displayStatus/status.
+ */
+export function statusForUi(
+  t: { displayStatus?: TicketStatus | string; status?: TicketStatus | string } | null | undefined
+): TicketStatus {
+  const raw = t?.displayStatus ?? t?.status
+  if (!raw) return "Submitted"
+  const s = String(raw)
+  if (API_STATUS_VALUES.includes(s as TicketStatus)) return s as TicketStatus
+  return "Submitted"
+}
+
+/**
+ * Map UI-selected status (TicketStatus) to API enum value for requests.
+ * Use for PATCH /api/tickets/:id and POST message body.
+ */
+export function statusForApi(status: TicketStatus): TicketStatus {
+  return API_STATUS_VALUES.includes(status) ? status : "Submitted"
+}
+
 
 
 

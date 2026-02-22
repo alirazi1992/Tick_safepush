@@ -1,9 +1,10 @@
+using Microsoft.AspNetCore.Identity;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Ticketing.Backend.Application.DTOs;
 using Ticketing.Backend.Application.Repositories;
 using Ticketing.Backend.Domain.Entities;
 using Ticketing.Backend.Domain.Enums;
-using Microsoft.AspNetCore.Identity;
 
 namespace Ticketing.Backend.Application.Services;
 
@@ -37,6 +38,8 @@ public interface ITechnicianService
     Task<TechnicianResponse?> GetTechnicianByUserIdAsync(Guid userId); // Get technician by linked User.Id
     Task<IEnumerable<TechnicianResponse>> GetAssignableTechniciansAsync(); // Get active, non-supervisor technicians for delegation
     Task<IEnumerable<TechnicianDirectoryItemDto>> GetTechnicianDirectoryAsync(string? search, string? availability, int? categoryId, int? subcategoryId);
+    /// <summary>Same source as Admin directory (no category/subcategory/availability filter). Includes Users with Role=Technician even without Technician row. Excludes excludeUserId.</summary>
+    Task<IEnumerable<TechnicianDirectoryItemDto>> GetActiveTechnicianDirectoryForSupervisorAsync(Guid? excludeUserId);
     Task<TechnicianResponse> CreateTechnicianAsync(TechnicianCreateRequest request);
     Task<TechnicianResponse?> UpdateTechnicianAsync(Guid id, TechnicianUpdateRequest request);
     Task<TechnicianResponse?> UpdateTechnicianExpertiseAsync(Guid id, List<int> subcategoryIds);
@@ -58,6 +61,7 @@ public class TechnicianService : ITechnicianService
     private readonly ICategoryRepository _categoryRepository;
     private readonly IPasswordHasher<User> _passwordHasher;
     private readonly ILogger<TechnicianService> _logger;
+    private readonly IHostEnvironment _env;
 
     public TechnicianService(
         ITechnicianRepository technicianRepository,
@@ -65,7 +69,8 @@ public class TechnicianService : ITechnicianService
         IUnitOfWork unitOfWork,
         ICategoryRepository categoryRepository,
         IPasswordHasher<User> passwordHasher,
-        ILogger<TechnicianService> logger)
+        ILogger<TechnicianService> logger,
+        IHostEnvironment env)
     {
         _technicianRepository = technicianRepository;
         _userRepository = userRepository;
@@ -73,6 +78,7 @@ public class TechnicianService : ITechnicianService
         _categoryRepository = categoryRepository;
         _passwordHasher = passwordHasher;
         _logger = logger;
+        _env = env;
     }
 
     public async Task<IEnumerable<TechnicianResponse>> GetAllTechniciansAsync(bool includeDeleted = false)
@@ -211,7 +217,49 @@ public class TechnicianService : ITechnicianService
             });
         }
 
+        // Admin fallback: when permission-based filtering returns zero, return all active technicians so admin can always assign.
+        // Use availability: null so dev handoff (unpopulated availability) does not hide everyone.
+        if ((categoryId.HasValue || subcategoryId.HasValue) && results.Count == 0)
+        {
+            if (_env.IsDevelopment())
+            {
+                _logger.LogInformation(
+                    "[TECHNICIAN_DIRECTORY] No technicians matched category/subcategory (CategoryId={CategoryId}, SubcategoryId={SubcategoryId}); returning all active technicians as fallback (availability filter dropped).",
+                    categoryId, subcategoryId);
+            }
+            return await GetTechnicianDirectoryAsync(search, null, null, null);
+        }
+
         return results.OrderBy(r => r.Name).ToList();
+    }
+
+    /// <summary>Active technician directory for supervisor: same as Admin directory (no permissions filter), plus Users with Role=Technician not in Technicians table. Excludes excludeUserId.</summary>
+    public async Task<IEnumerable<TechnicianDirectoryItemDto>> GetActiveTechnicianDirectoryForSupervisorAsync(Guid? excludeUserId)
+    {
+        var directory = (await GetTechnicianDirectoryAsync(null, null, null, null)).ToList();
+        var userIdsInDirectory = directory.Select(d => d.TechnicianUserId).ToHashSet();
+        var technicianUsers = (await _userRepository.GetByRoleAsync(UserRole.Technician)).ToList();
+        var extra = technicianUsers
+            .Where(u => u.Id != excludeUserId && !userIdsInDirectory.Contains(u.Id))
+            .Select(u => new TechnicianDirectoryItemDto
+            {
+                TechnicianId = default,
+                TechnicianUserId = u.Id,
+                Name = u.FullName,
+                Email = u.Email ?? string.Empty,
+                Department = u.Department,
+                Availability = "Free",
+                InboxTotalActive = 0,
+                InboxLeftActiveNonTerminal = 0,
+                Expertise = new List<TechnicianExpertiseTagDto>()
+            })
+            .ToList();
+        var combined = directory
+            .Where(d => d.TechnicianUserId != excludeUserId)
+            .Concat(extra)
+            .OrderBy(r => r.Name)
+            .ToList();
+        return combined;
     }
 
     public async Task<TechnicianResponse> CreateTechnicianAsync(TechnicianCreateRequest request)
@@ -524,7 +572,7 @@ public class TechnicianService : ITechnicianService
             IsSupervisor = technician.IsSupervisor,
             Role = technician.IsSupervisor ? "SupervisorTechnician" : "Technician",
             CreatedAt = technician.CreatedAt,
-            UserId = technician.UserId, // For debugging: null = cannot be assigned
+            UserId = technician.UserId,
             SubcategoryIds = subcategoryIds,
             CoverageCount = subcategoryIds.Count,
             // Soft delete fields

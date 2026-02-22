@@ -140,12 +140,11 @@ export function ClientDashboard({
   const [statsLoading, setStatsLoading] = useState(false);
   const [statsError, setStatsError] = useState<string | null>(null);
   const statsRequestRef = useRef(0);
-  const [apiBaseUrl, setApiBaseUrl] = useState<string>("http://localhost:5000");
-  
-  // Get API base URL on mount
+  const [apiBaseUrl, setApiBaseUrl] = useState<string>("");
+
+  // Get API base URL on mount (dev: may use default; production: env only — no localhost)
   useEffect(() => {
-    const base = getEffectiveApiBaseUrl() || "http://localhost:5000";
-    setApiBaseUrl(base);
+    setApiBaseUrl(getEffectiveApiBaseUrl() || "");
   }, []);
 
   useEffect(() => {
@@ -190,10 +189,12 @@ export function ClientDashboard({
     return matchesSearch && matchesStatus && matchesPriority;
   });
 
-  // Use effective status for counting (clients see Redo as Open)
-  const openTickets = userTickets.filter((t) => getEffectiveStatus(t.status, "client") === "Open");
-  const inProgressTickets = userTickets.filter((t) => getEffectiveStatus(t.status, "client") === "InProgress");
-  const solvedTickets = userTickets.filter((t) => getEffectiveStatus(t.status, "client") === "Solved");
+  // Single source of truth for status in UI (counts + stat-card modal list).
+  const statusForUi = (t: Ticket) => getEffectiveStatus(t.displayStatus ?? t.status, "client");
+  const openCount = userTickets.filter((t) => statusForUi(t) === "Open").length;
+  const inProgressCount = userTickets.filter((t) => statusForUi(t) === "InProgress").length;
+  const resolvedCount = userTickets.filter((t) => statusForUi(t) === "Solved").length;
+  const totalCount = userTickets.length;
   const unseenTickets = userTickets.filter((t) => t.isUnseen);
 
   const handleViewTicket = (ticket: Ticket) => {
@@ -256,14 +257,11 @@ export function ClientDashboard({
   };
 
   const applyCardFilter = (key: string, items: Ticket[]) => {
-    if (key === "open") {
-      return items.filter(
-        (ticket) => getEffectiveStatus(ticket.displayStatus ?? ticket.status, "client") === "Open"
-      );
-    }
-    if (key === "unseen") {
-      return items.filter((ticket) => ticket.isUnseen);
-    }
+    if (key === "all") return items;
+    if (key === "open") return items.filter((t) => statusForUi(t) === "Open");
+    if (key === "inProgress") return items.filter((t) => statusForUi(t) === "InProgress");
+    if (key === "solved") return items.filter((t) => statusForUi(t) === "Solved");
+    if (key === "unseen") return items.filter((t) => t.isUnseen === true);
     return items;
   };
 
@@ -369,7 +367,7 @@ export function ClientDashboard({
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-right font-iran">
-              {userTickets.length}
+              {totalCount}
             </div>
           </CardContent>
         </Card>
@@ -386,7 +384,7 @@ export function ClientDashboard({
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-right font-iran">
-              {openTickets.length}
+              {openCount}
             </div>
           </CardContent>
         </Card>
@@ -403,7 +401,7 @@ export function ClientDashboard({
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-right font-iran">
-              {inProgressTickets.length}
+              {inProgressCount}
             </div>
           </CardContent>
         </Card>
@@ -420,7 +418,7 @@ export function ClientDashboard({
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-right font-iran">
-              {solvedTickets.length}
+              {resolvedCount}
             </div>
           </CardContent>
         </Card>

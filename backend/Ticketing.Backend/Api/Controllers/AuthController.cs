@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Ticketing.Backend.Application.Common;
 using Ticketing.Backend.Application.Common.Interfaces;
 using Ticketing.Backend.Application.DTOs;
 using Ticketing.Backend.Application.Services;
@@ -479,7 +480,7 @@ public class AuthController : ControllerBase
 
         var email = User.FindFirstValue("email") ?? User.FindFirstValue(ClaimTypes.Email);
 
-        // JWT path: email and role/supervisor from claims
+        // JWT path: email and role/supervisor from claims (same rules as Login via LandingPathResolver)
         if (!string.IsNullOrEmpty(email))
         {
             var role = User.FindFirstValue(ClaimTypes.Role) ?? User.FindFirstValue("role");
@@ -487,11 +488,19 @@ public class AuthController : ControllerBase
                 User.FindFirstValue("isSupervisor") ?? User.FindFirstValue("is_supervisor"),
                 "true",
                 StringComparison.OrdinalIgnoreCase);
-            var landingPath =
-                string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase) ? "/admin" :
-                (string.Equals(role, "Technician", StringComparison.OrdinalIgnoreCase) && isSupervisor) ? "/supervisor" :
-                string.Equals(role, "Technician", StringComparison.OrdinalIgnoreCase) ? "/technician" :
-                string.Equals(role, "Client", StringComparison.OrdinalIgnoreCase) ? "/client" : null;
+            if (string.IsNullOrWhiteSpace(role) || !Enum.TryParse<UserRole>(role, true, out var parsedRole) || !Enum.IsDefined(typeof(UserRole), parsedRole))
+            {
+                return Ok(new
+                {
+                    isAuthenticated = false,
+                    authError = "missing_role",
+                    email = (string?)null,
+                    role = (string?)null,
+                    isSupervisor = false,
+                    landingPath = "/login"
+                });
+            }
+            var landingPath = LandingPathResolver.GetLandingPath(parsedRole, isSupervisor);
             if (!HasValidRoleAndLandingPath(role, landingPath))
             {
                 return Ok(new

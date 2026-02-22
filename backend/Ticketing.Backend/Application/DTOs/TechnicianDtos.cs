@@ -13,7 +13,8 @@ public class TechnicianResponse
     /// Human-readable role label for admin UI.
     /// </summary>
     public string Role { get; set; } = "Technician";
-    public DateTime CreatedAt { get; set; }
+    /// <summary>When unknown (e.g. directory-only entry), null; never 0001-01-01.</summary>
+    public DateTime? CreatedAt { get; set; }
     /// <summary>
     /// Linked User.Id (for JWT sub / assignment). Null = technician cannot be assigned to tickets.
     /// </summary>

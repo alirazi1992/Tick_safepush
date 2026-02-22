@@ -223,6 +223,23 @@ public class TicketsController : ControllerBase
         }
         catch (Exception ex)
         {
+            // Production-safe guard: missing RBAC table must not cause HTTP 500
+            var sqlEx = ex as SqliteException ?? ex.InnerException as SqliteException;
+            if (sqlEx != null &&
+                sqlEx.Message?.Contains("TechnicianSubcategoryPermissions", StringComparison.OrdinalIgnoreCase) == true &&
+                (sqlEx.Message.Contains("no such table", StringComparison.OrdinalIgnoreCase) || sqlEx.SqliteErrorCode == 1))
+            {
+                _logger.LogError(sqlEx, "GetTickets: RBAC permissions table missing. Run database migrations. UserId={UserId}, Role={Role}",
+                    context.Value.userId, context.Value.role);
+                return StatusCode(503, new ProblemDetails
+                {
+                    Status = 503,
+                    Title = "Service Unavailable",
+                    Detail = "RBAC permissions table missing. Run database migrations.",
+                    Instance = HttpContext.Request.Path
+                });
+            }
+
             _logger.LogError(ex, "GetTickets FAILED: UserId={UserId}, Role={Role}, ExceptionType={ExceptionType}, Message={Message}, StackTrace={StackTrace}, InnerException={InnerException}",
                 context.Value.userId, context.Value.role, ex.GetType().Name, ex.Message, ex.StackTrace, ex.InnerException?.Message);
             

@@ -1,3 +1,5 @@
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Ticketing.Backend.Application.DTOs;
 using Ticketing.Backend.Application.Repositories;
@@ -637,43 +639,75 @@ public class TicketService : ITicketService
         // PHASE 2: SeenRead is a workflow status.
         // If a non-client actor (technician/admin) views a Submitted ticket, transition to SeenRead once.
         // Per-user read state is still tracked via TicketUserState.LastSeenAt (blue dot indicator).
+        // Ancillary write: do not fail GET if status transition or save fails (idempotent best-effort).
         if (ticket.Status == TicketStatus.Submitted &&
             ticket.CreatedByUserId != userId &&
             (role == UserRole.Technician || role == UserRole.Admin))
         {
-            var statusResult = await ChangeStatusAsync(ticket.Id, TicketStatus.SeenRead, userId, role);
-            if (statusResult.Success && statusResult.Ticket != null)
+            try
             {
-                return statusResult.Ticket;
+                var statusResult = await ChangeStatusAsync(ticket.Id, TicketStatus.SeenRead, userId, role);
+                if (statusResult.Success && statusResult.Ticket != null)
+                {
+                    return statusResult.Ticket;
+                }
+            }
+            catch (DbUpdateException ex)
+            {
+                _logger?.LogWarning(ex, "GetTicketAsync: Ancillary status change (Submitted->SeenRead) failed, continuing with ticket load. Inner: {InnerMessage}", ex.InnerException?.Message ?? ex.Message);
+            }
+            catch (SqliteException ex)
+            {
+                _logger?.LogWarning(ex, "GetTicketAsync: Ancillary status change (Submitted->SeenRead) failed, continuing with ticket load. SqliteErrorCode: {Code}, Message: {Message}", ex.SqliteErrorCode, ex.Message);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "GetTicketAsync: Ancillary status change failed, continuing with ticket load. Message: {Message}", ex.Message);
             }
         }
-        
+
         var state = await _ticketUserStateRepository.GetStateAsync(ticket.Id, userId);
         var isFirstView = state == null || state.LastSeenAt == null;
-        
-        // Auto-mark as seen when technician/admin views the ticket (updates per-user state, not workflow status)
+
+        // Auto-mark as seen when technician/admin views the ticket (updates per-user state, not workflow status).
+        // Idempotent best-effort: do not fail GET if upsert/activity save fails (e.g. unique constraint, FK).
         if (ticket.CreatedByUserId != userId && (role == UserRole.Technician || role == UserRole.Admin))
         {
-            await _ticketUserStateRepository.UpsertSeenAsync(ticket.Id, userId, DateTime.UtcNow);
-            await _unitOfWork.SaveChangesAsync();
-            
-            // Log activity event for first view (without changing status)
-            if (isFirstView)
+            try
             {
-                var actor = await _userRepository.GetByIdAsync(userId);
-                var actorRole = await GetActorRoleLabelAsync(actor, role);
-                await _activityEventRepository.AddEventAsync(
-                    ticket.Id,
-                    userId,
-                    actorRole,
-                    "TechnicianOpened",
-                    null, // No status change
-                    null, // No status change
-                    null);
+                await _ticketUserStateRepository.UpsertSeenAsync(ticket.Id, userId, DateTime.UtcNow);
+                await _unitOfWork.SaveChangesAsync();
+
+                // Log activity event for first view (without changing status)
+                if (isFirstView)
+                {
+                    var actor = await _userRepository.GetByIdAsync(userId);
+                    var actorRole = await GetActorRoleLabelAsync(actor, role);
+                    await _activityEventRepository.AddEventAsync(
+                        ticket.Id,
+                        userId,
+                        actorRole,
+                        "TechnicianOpened",
+                        null, // No status change
+                        null, // No status change
+                        null);
+                }
+
+                // Refresh state after upsert
+                state = await _ticketUserStateRepository.GetStateAsync(ticket.Id, userId);
             }
-            
-            // Refresh state after upsert
-            state = await _ticketUserStateRepository.GetStateAsync(ticket.Id, userId);
+            catch (DbUpdateException ex)
+            {
+                _logger?.LogWarning(ex, "GetTicketAsync: Ancillary mark-seen/activity write failed, ticket still returned. Inner: {InnerMessage}", ex.InnerException?.Message ?? ex.Message);
+            }
+            catch (SqliteException ex)
+            {
+                _logger?.LogWarning(ex, "GetTicketAsync: Ancillary mark-seen/activity write failed, ticket still returned. SqliteErrorCode: {Code}, Message: {Message}", ex.SqliteErrorCode, ex.Message);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "GetTicketAsync: Ancillary mark-seen/activity write failed, ticket still returned. Message: {Message}", ex.Message);
+            }
         }
 
         var response = MapToResponse(ticket, userId, state?.LastSeenAt, role);

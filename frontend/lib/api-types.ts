@@ -480,8 +480,9 @@ export interface ApiTechnicianResponse {
   isActive: boolean
   isSupervisor?: boolean
   role?: "Technician" | "SupervisorTechnician"
-  createdAt: string
-  userId?: string | null  // Linked User.Id (for assignment) - null = cannot be assigned
+  /** Backend may omit or send null when unknown; never 0001-01-01. */
+  createdAt?: string | null
+  userId?: string | null  // Canonical: same as id for supervisor directory; User.Id for assignment
   subcategoryIds?: number[]
   coverageCount?: number
 }

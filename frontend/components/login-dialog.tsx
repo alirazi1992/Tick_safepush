@@ -255,25 +255,6 @@ export function LoginDialog({ open, onOpenChange }: LoginDialogProps) {
               </Button>
             </form>
 
-            {/* Demo Accounts */}
-            <div className="pt-4 border-t">
-              <p className="text-xs text-muted-foreground text-center mb-2">حساب‌های نمونه برای تست:</p>
-              <div className="space-y-1 text-xs text-muted-foreground">
-                <div className="flex justify-between items-center p-2 bg-muted/50 rounded">
-                  <span>کاربر: client1@test.com / Test123!</span>
-                  <User className="w-3 h-3" />
-                </div>
-                <div className="flex justify-between items-center p-2 bg-muted/50 rounded">
-                  <span>تکنسین: tech1@test.com / Test123!</span>
-                  <Wrench className="w-3 h-3" />
-                </div>
-                <div className="flex justify-between items-center p-2 bg-muted/50 rounded">
-                  <span>مدیر: admin@test.com / Test123!</span>
-                  <Shield className="w-3 h-3" />
-                </div>
-              </div>
-            </div>
-
             <div className="text-center text-sm text-muted-foreground">
               <p>حساب کاربری ندارید؟</p>
               <Button variant="link" className="p-0 h-auto text-primary" onClick={() => setActiveTab("signup")}>

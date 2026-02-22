@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using System.Linq;
 using Ticketing.Backend.Domain.Entities;
 using Ticketing.Backend.Domain.Enums;
@@ -8,78 +9,33 @@ namespace Ticketing.Backend.Infrastructure.Data;
 
 public static class SeedData
 {
-    public static async Task InitializeAsync(AppDbContext context, IPasswordHasher<User> passwordHasher)
+    public static async Task InitializeAsync(AppDbContext context, IPasswordHasher<User> passwordHasher, ILogger logger)
     {
-        // Seed/test users — all use the same known password: Test123!
-        const string SeedPassword = "Test123!";
-        var userSeeds = new[]
-        {
-            new { FullName = "Admin User", Email = "admin@test.com", Role = UserRole.Admin, Phone = "+989000000000", Department = "IT" },
-            new { FullName = "Tech One", Email = "tech1@test.com", Role = UserRole.Technician, Phone = "+989000000001", Department = "Field Support" },
-            new { FullName = "Tech Two", Email = "tech2@test.com", Role = UserRole.Technician, Phone = "+989000000002", Department = "Network" },
-            new { FullName = "Client One", Email = "client1@test.com", Role = UserRole.Client, Phone = "+989000000010", Department = "Finance" },
-            new { FullName = "Client Two", Email = "client2@test.com", Role = UserRole.Client, Phone = "+989000000011", Department = "Sales" },
-        };
-
-        foreach (var seed in userSeeds)
-        {
-            var existing = await context.Users.FirstOrDefaultAsync(u => u.Email == seed.Email);
-            if (existing == null)
-            {
-                var user = new User
-                {
-                    Id = Guid.NewGuid(),
-                    FullName = seed.FullName,
-                    Email = seed.Email,
-                    Role = seed.Role,
-                    PhoneNumber = seed.Phone,
-                    Department = seed.Department,
-                    CreatedAt = DateTime.UtcNow
-                };
-                user.PasswordHash = passwordHasher.HashPassword(user, SeedPassword);
-                context.Users.Add(user);
-            }
-            else
-            {
-                // Ensure existing seed users always have the known password
-                existing.PasswordHash = passwordHasher.HashPassword(existing, SeedPassword);
-            }
-        }
-
-        // Guarantee deterministic Admin test user (admin@test.com / Admin123!)
-        const string AdminTestEmail = "admin@test.com";
-        const string AdminTestPassword = "Admin123!";
-        var adminUser = await context.Users.FirstOrDefaultAsync(u => u.Email == AdminTestEmail);
-        if (adminUser != null)
-        {
-            adminUser.PasswordHash = passwordHasher.HashPassword(adminUser, AdminTestPassword);
-            adminUser.Role = UserRole.Admin;
-        }
-        else
-        {
-            var newAdmin = new User
-            {
-                Id = Guid.NewGuid(),
-                FullName = "System Administrator",
-                Email = AdminTestEmail,
-                Role = UserRole.Admin,
-                PhoneNumber = "+989000000000",
-                Department = "IT",
-                CreatedAt = DateTime.UtcNow
-            };
-            newAdmin.PasswordHash = passwordHasher.HashPassword(newAdmin, AdminTestPassword);
-            context.Users.Add(newAdmin);
-        }
+        // Deterministic seed users: upsert by email (case-insensitive) so we never duplicate
+        // Required default users (roles and passwords as specified)
+        await UpsertSeedUserAsync(context, passwordHasher, logger, "admin@test.com", "System Administrator", "+989000000000", "IT", UserRole.Admin, "Admin123!");
+        await UpsertSeedUserAsync(context, passwordHasher, logger, "client1@test.com", "Client One", "+989000000010", "Finance", UserRole.Client, "Test123!");
+        await UpsertSeedUserAsync(context, passwordHasher, logger, "tech1@test.com", "Tech One", "+989000000001", "Field Support", UserRole.Technician, "Test123!");
+        await UpsertSeedUserAsync(context, passwordHasher, logger, "techsuper@email.com", "Tech Supervisor", "+989000000021", "Support", UserRole.Technician, "Test123!");
+        // Additional users for ticket seed / backward compatibility
+        await UpsertSeedUserAsync(context, passwordHasher, logger, "tech2@test.com", "Tech Two", "+989000000002", "Network", UserRole.Technician, "Test123!");
+        await UpsertSeedUserAsync(context, passwordHasher, logger, "tech3@test.com", "Tech Three", "+989000000003", "Support", UserRole.Technician, "Test123!");
+        await UpsertSeedUserAsync(context, passwordHasher, logger, "client2@test.com", "Client Two", "+989000000011", "Sales", UserRole.Client, "Test123!");
+        await UpsertSeedUserAsync(context, passwordHasher, logger, "supervisor@test.com", "Supervisor One", "+989000000020", "Support", UserRole.Technician, "Test123!");
+        logger.LogInformation("[SEED] seed users ensured");
 
         await context.SaveChangesAsync();
 
-        // Ensure technician profiles exist for technician users
+        // Ensure technician profiles exist for technician users (skip supervisor@test.com; handled by dedicated block below)
+        const string SupervisorEmail = "supervisor@test.com";
         var technicianUsers = await context.Users
             .Where(u => u.Role == UserRole.Technician)
             .ToListAsync();
 
         foreach (var techUser in technicianUsers)
         {
+            if (techUser.Email != null && techUser.Email.ToLower() == SupervisorEmail)
+                continue;
             var existingTechnician = await context.Technicians
                 .FirstOrDefaultAsync(t => t.UserId == techUser.Id || t.Email == techUser.Email);
 
@@ -89,7 +45,7 @@ public static class SeedData
                 {
                     Id = Guid.NewGuid(),
                     FullName = techUser.FullName,
-                    Email = techUser.Email,
+                    Email = techUser.Email ?? string.Empty,
                     Phone = techUser.PhoneNumber,
                     Department = techUser.Department,
                     IsActive = true,
@@ -98,6 +54,61 @@ public static class SeedData
                 });
             }
         }
+
+        // Explicit supervisor flags: deterministic, do not rely on previous state
+        var tech1Profile = await context.Technicians.FirstOrDefaultAsync(t => t.Email == "tech1@test.com");
+        if (tech1Profile != null)
+            tech1Profile.IsSupervisor = false;
+        var tech2Profile = await context.Technicians.FirstOrDefaultAsync(t => t.Email == "tech2@test.com");
+        if (tech2Profile != null)
+            tech2Profile.IsSupervisor = false;
+        var tech3Profile = await context.Technicians.FirstOrDefaultAsync(t => t.Email == "tech3@test.com");
+        if (tech3Profile != null)
+            tech3Profile.IsSupervisor = false;
+        var techsuperProfile = await context.Technicians.FirstOrDefaultAsync(t => t.Email == "techsuper@email.com");
+        if (techsuperProfile != null)
+            techsuperProfile.IsSupervisor = true;
+
+        // Dedicated supervisor: upsert Technician by Email (find by email first to avoid UNIQUE; never insert if exists)
+        var supervisorUser = await context.Users.FirstOrDefaultAsync(u => u.Email != null && u.Email.ToLower() == SupervisorEmail);
+        if (supervisorUser != null)
+        {
+            var supervisorTech = await context.Technicians
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(t => t.Email == SupervisorEmail);
+            if (supervisorTech != null)
+            {
+                supervisorTech.UserId = supervisorUser.Id;
+                supervisorTech.FullName = "Supervisor One";
+                supervisorTech.Phone = "+989000000020";
+                supervisorTech.Department = "Support";
+                supervisorTech.IsSupervisor = true;
+                supervisorTech.IsActive = true;
+                supervisorTech.IsDeleted = false;
+            }
+            else
+            {
+                context.Technicians.Add(new Technician
+                {
+                    Id = Guid.NewGuid(),
+                    FullName = "Supervisor One",
+                    Email = SupervisorEmail,
+                    Phone = "+989000000020",
+                    Department = "Support",
+                    IsActive = true,
+                    IsSupervisor = true,
+                    IsDeleted = false,
+                    CreatedAt = DateTime.UtcNow,
+                    UserId = supervisorUser.Id
+                });
+            }
+            logger.LogInformation("[SEED] supervisor technician ensured (IsSupervisor=true)");
+        }
+
+        await context.SaveChangesAsync();
+
+        // Supervisor–technician links for dev/demo: supervisor@test.com and techsuper@email.com see tech1, tech2 linked
+        await EnsureSupervisorTechnicianLinksAsync(context, logger);
 
         await context.SaveChangesAsync();
 
@@ -319,6 +330,58 @@ public static class SeedData
             context.SystemSettings.Add(defaultSettings);
             await context.SaveChangesAsync();
         }
+
+        logger.LogInformation("[SEED] Seed ran successfully.");
+    }
+
+    /// <summary>
+    /// Find user by email (case-insensitive). If exists: update FullName, Phone, Department, Role, password; ensure SecurityStamp/Lockout defaults. If not: create and add. Idempotent.
+    /// </summary>
+    private static async Task UpsertSeedUserAsync(
+        AppDbContext context,
+        IPasswordHasher<User> passwordHasher,
+        ILogger logger,
+        string email,
+        string fullName,
+        string? phone,
+        string? department,
+        UserRole role,
+        string password)
+    {
+        var normalizedEmail = email.Trim().ToLowerInvariant();
+        var existing = await context.Users.FirstOrDefaultAsync(u => u.Email != null && u.Email.ToLower() == normalizedEmail);
+        if (existing != null)
+        {
+            existing.FullName = fullName;
+            existing.PhoneNumber = phone;
+            existing.Department = department;
+            existing.Role = role;
+            existing.PasswordHash = passwordHasher.HashPassword(existing, password);
+            if (string.IsNullOrEmpty(existing.SecurityStamp))
+                existing.SecurityStamp = Guid.NewGuid().ToString();
+            existing.LockoutEnabled = false;
+            existing.LockoutEnd = null;
+            logger.LogInformation("[SEED] upsert user: {Email} (updated)", existing.Email);
+        }
+        else
+        {
+            var user = new User
+            {
+                Id = Guid.NewGuid(),
+                FullName = fullName,
+                Email = normalizedEmail,
+                PhoneNumber = phone,
+                Department = department,
+                Role = role,
+                CreatedAt = DateTime.UtcNow,
+                PasswordHash = passwordHasher.HashPassword(new User(), password),
+                SecurityStamp = Guid.NewGuid().ToString(),
+                LockoutEnabled = false,
+                LockoutEnd = null
+            };
+            context.Users.Add(user);
+            logger.LogInformation("[SEED] upsert user: {Email} (created)", normalizedEmail);
+        }
     }
 
     /// <summary>
@@ -382,5 +445,70 @@ public static class SeedData
     private static string NormalizeName(string name)
     {
         return name.Trim().ToUpperInvariant();
+    }
+
+    /// <summary>
+    /// Ensures supervisor–technician links for dev/demo so supervisor list is non-empty.
+    /// Links supervisor@test.com and techsuper@email.com to tech1@test.com and tech2@test.com.
+    /// </summary>
+    /// <summary>
+    /// Runs every startup in Development. Inserts SupervisorTechnicianLinks using Users.Id (from Users table by email).
+    /// Cleans dangling links (supervisor/technician UserId no longer in Users) then idempotently ensures links for current IDs.
+    /// </summary>
+    private static async Task EnsureSupervisorTechnicianLinksAsync(AppDbContext context, ILogger logger)
+    {
+        var userIds = await context.Users.Select(u => u.Id).ToListAsync();
+        var dangling = await context.SupervisorTechnicianLinks
+            .Where(l => !userIds.Contains(l.SupervisorUserId) || !userIds.Contains(l.TechnicianUserId))
+            .ToListAsync();
+        if (dangling.Count > 0)
+        {
+            context.SupervisorTechnicianLinks.RemoveRange(dangling);
+            await context.SaveChangesAsync();
+            logger.LogInformation("[SEED] SupervisorTechnicianLinks: removed {Count} dangling links (stale UserIds)", dangling.Count);
+        }
+
+        var supervisorEmails = new[] { "supervisor@test.com", "techsuper@email.com" };
+        var technicianEmails = new[] { "tech1@test.com", "tech2@test.com" };
+        var supSet = new HashSet<string>(supervisorEmails, StringComparer.OrdinalIgnoreCase);
+        var techSet = new HashSet<string>(technicianEmails, StringComparer.OrdinalIgnoreCase);
+
+        var supervisorUsers = await context.Users
+            .Where(u => u.Email != null && supSet.Contains(u.Email))
+            .ToListAsync();
+        var technicianUsers = await context.Users
+            .Where(u => u.Email != null && techSet.Contains(u.Email))
+            .ToListAsync();
+
+        if (supervisorUsers.Count == 0 || technicianUsers.Count == 0)
+        {
+            logger.LogWarning("[SEED] SupervisorTechnicianLinks skipped: supervisorUsers={SupCount}, technicianUsers={TechCount} (check emails)", supervisorUsers.Count, technicianUsers.Count);
+            return;
+        }
+
+        var added = 0;
+        foreach (var sup in supervisorUsers)
+        {
+            foreach (var tech in technicianUsers)
+            {
+                var exists = await context.SupervisorTechnicianLinks
+                    .AnyAsync(l => l.SupervisorUserId == sup.Id && l.TechnicianUserId == tech.Id);
+                if (exists) continue;
+
+                context.SupervisorTechnicianLinks.Add(new SupervisorTechnicianLink
+                {
+                    Id = Guid.NewGuid(),
+                    SupervisorUserId = sup.Id,
+                    TechnicianUserId = tech.Id,
+                    CreatedAt = DateTime.UtcNow
+                });
+                added++;
+                logger.LogInformation("[SEED] Linked supervisor {SupEmail} (UserId={SupId}) to technician {TechEmail} (UserId={TechId})", sup.Email, sup.Id, tech.Email, tech.Id);
+            }
+        }
+
+        await context.SaveChangesAsync();
+        var totalLinks = await context.SupervisorTechnicianLinks.CountAsync();
+        logger.LogInformation("[SEED] SupervisorTechnicianLinks: added={Added}, totalLinksInDb={TotalLinks} (supervisor@test.com + techsuper@email.com -> tech1, tech2)", added, totalLinks);
     }
 }

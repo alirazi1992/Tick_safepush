@@ -2,8 +2,8 @@
  * Reports API client for admin downloadable reports
  */
 
-import { apiRequest, getApiBaseUrl } from "./api-client";
-import { joinApi } from "./url";
+import { apiRequest } from "./api-client";
+import { apiFetch } from "./api";
 
 // Technician Work Report (JSON)
 export interface TechnicianWorkReportUser {
@@ -88,22 +88,21 @@ function technicianWorkReportParams(from: string, to: string, userId?: string, f
 
 /**
  * Download Technician Performance report as Excel (.xlsx). Uses same endpoint and from/to/userId as table (getTechnicianWorkReport).
+ * When token is null (cookie-based auth), backend uses cookie via credentials: "include".
  */
 export async function downloadTechnicianWorkReportExcel(
-  token: string,
+  token: string | null,
   from: string,
   to: string,
   userId?: string
 ): Promise<void> {
   const params = technicianWorkReportParams(from, to, userId, "xlsx");
-  const baseUrl = await getApiBaseUrl();
-  const url = joinApi(baseUrl, `/api/admin/reports/technician-work?${params.toString()}`);
-
-  const response = await fetch(url, {
+  const path = `/api/admin/reports/technician-work?${params.toString()}`;
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await apiFetch(path, {
     method: "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+    headers,
   });
 
   if (!response.ok) {
@@ -133,7 +132,8 @@ export type ReportDownloadFormat = "csv" | "xlsx" | "zip";
 
 export interface DownloadReportOptions {
   type: ReportDownloadType;
-  token: string;
+  /** JWT token; when null (cookie-based auth), request uses credentials only and backend uses cookie. */
+  token: string | null;
   params: ReportParams;
   format?: ReportDownloadFormat;
 }
@@ -162,14 +162,12 @@ export async function downloadReport(options: DownloadReportOptions): Promise<vo
   const fmt = validFormats.includes(format) ? format : "xlsx";
 
   const queryParams = buildQueryParams(params, fmt);
-  const baseUrl = await getApiBaseUrl();
-  const url = joinApi(baseUrl, `/api/admin/reports/${path}?${queryParams}`);
-
-  const response = await fetch(url, {
+  const apiPath = `/api/admin/reports/${path}?${queryParams}`;
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await apiFetch(apiPath, {
     method: "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+    headers,
   });
 
   if (!response.ok) {

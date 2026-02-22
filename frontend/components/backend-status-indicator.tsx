@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { AlertCircle } from "lucide-react"
 import { getApiBaseUrl } from "@/lib/api-client"
+import { apiFetch } from "@/lib/api"
 
 interface BackendDiagnostics {
   url: string;
@@ -33,9 +34,9 @@ export function BackendStatusIndicator() {
         const timeoutId = setTimeout(() => controller.abort(), 5000)
         
         try {
-          const response = await fetch(`${baseUrl}/api/health`, {
+          const response = await apiFetch("/api/health", {
             signal: controller.signal,
-            cache: 'no-store',
+            cache: "no-store",
           })
           clearTimeout(timeoutId)
           

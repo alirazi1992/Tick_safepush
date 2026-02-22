@@ -13,21 +13,28 @@ public class SupervisorController : ControllerBase
 {
     private readonly ISupervisorService _supervisorService;
     private readonly ILogger<SupervisorController> _logger;
+    private readonly IWebHostEnvironment _env;
 
     public SupervisorController(
         ISupervisorService supervisorService,
-        ILogger<SupervisorController> logger)
+        ILogger<SupervisorController> logger,
+        IWebHostEnvironment env)
     {
         _supervisorService = supervisorService;
         _logger = logger;
+        _env = env;
     }
 
+    /// <summary>
+    /// Resolves current user's User.Id (GUID) from claims. Use this for SupervisorUserId/TechnicianUserId (table columns are User.Id).
+    /// </summary>
     private Guid GetCurrentUserId()
     {
-        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+            ?? User.FindFirst("sub")?.Value;
         if (string.IsNullOrEmpty(userIdClaim) || !Guid.TryParse(userIdClaim, out var userId))
         {
-            throw new UnauthorizedAccessException("User ID not found in token");
+            throw new UnauthorizedAccessException("User ID not found in token (expect NameIdentifier or sub claim with GUID)");
         }
         return userId;
     }
@@ -41,6 +48,15 @@ public class SupervisorController : ControllerBase
         try
         {
             var supervisorUserId = GetCurrentUserId();
+            if (_env.IsDevelopment())
+            {
+                var sub = User.FindFirst("sub")?.Value;
+                var nameId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                var email = User.FindFirst(ClaimTypes.Email)?.Value ?? User.FindFirst("email")?.Value;
+                _logger.LogInformation(
+                    "[SUPERVISOR_DEV] GET technicians: sub={Sub}, NameIdentifier={NameId}, email={Email}, resolvedSupervisorUserId={SupervisorUserId}",
+                    sub, nameId, email, supervisorUserId);
+            }
             var technicians = await _supervisorService.GetTechniciansAsync(supervisorUserId);
             return Ok(technicians);
         }
@@ -65,6 +81,15 @@ public class SupervisorController : ControllerBase
         try
         {
             var supervisorUserId = GetCurrentUserId();
+            if (_env.IsDevelopment())
+            {
+                var sub = User.FindFirst("sub")?.Value;
+                var nameId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                var email = User.FindFirst(ClaimTypes.Email)?.Value ?? User.FindFirst("email")?.Value;
+                _logger.LogInformation(
+                    "[SUPERVISOR_DEV] GET technicians/available: sub={Sub}, NameIdentifier={NameId}, email={Email}, resolvedSupervisorUserId={SupervisorUserId}",
+                    sub, nameId, email, supervisorUserId);
+            }
             var technicians = await _supervisorService.GetAvailableTechniciansAsync(supervisorUserId);
             return Ok(technicians);
         }

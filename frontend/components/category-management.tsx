@@ -39,12 +39,11 @@ import {
 } from "lucide-react";
 import type { FormFieldDef, FieldType } from "@/lib/dynamic-forms";
 import { parseOptions } from "@/lib/dynamic-forms";
+import { apiRequest } from "@/lib/api-client";
 import {
-  getAdminCategories,
   createCategory,
   updateCategory,
   deleteCategory,
-  getSubcategories,
   createSubcategory,
   updateSubcategory,
   deleteSubcategory,
@@ -92,16 +91,14 @@ export function CategoryManagement({
   const [fieldDesignerOpen, setFieldDesignerOpen] = useState(false);
   const [designingScope, setDesigningScope] = useState<{ type: "category" | "subcategory"; id: number } | null>(null);
 
-  // Load categories on mount and when search query changes
+  // Load categories on mount and when search query changes (cookie auth; token optional)
   useEffect(() => {
-    if (token) {
-      loadCategories();
-    }
+    loadCategories();
   }, [token, searchQuery]);
 
-  // Load subcategories when category is selected
+  // Load subcategories when category is selected (cookie auth; token optional)
   useEffect(() => {
-    if (token && selectedCategoryId) {
+    if (selectedCategoryId != null) {
       loadSubcategories(selectedCategoryId);
     } else {
       setSubcategories([]);
@@ -109,11 +106,55 @@ export function CategoryManagement({
   }, [token, selectedCategoryId]);
 
   const loadCategories = async () => {
-    if (!user) return;
     setLoading(true);
     try {
-      const result = await getAdminCategories(token, { search: searchQuery });
-      setCategories(result.items);
+      const raw = await apiRequest<unknown>("/api/categories", {
+        method: "GET",
+        token: token ?? undefined,
+      });
+      console.log("[CATEGORY_MGMT] raw", raw);
+
+      const rawList = Array.isArray(raw)
+        ? raw
+        : (raw as { items?: unknown[]; data?: unknown[]; totalCount?: number })?.items ??
+          (raw as { items?: unknown[]; data?: unknown[]; totalCount?: number })?.data ??
+          [];
+
+      const normalize = (c: Record<string, unknown>): ApiCategoryResponse => ({
+        id: (c.id as number) ?? (c.Id as number),
+        name: (c.name as string) ?? (c.Name as string) ?? "",
+        isActive: (c.isActive as boolean) ?? (c.IsActive as boolean) ?? true,
+        description: (c.description as string | null) ?? (c.Description as string | null) ?? null,
+        subcategories: Array.isArray(c.subcategories ?? c.Subcategories)
+          ? ((c.subcategories ?? c.Subcategories) as Record<string, unknown>[]).map((s) => ({
+              id: (s.id as number) ?? (s.Id as number),
+              categoryId: (s.categoryId as number) ?? (s.CategoryId as number),
+              name: (s.name as string) ?? (s.Name as string) ?? "",
+              isActive: (s.isActive as boolean) ?? (s.IsActive as boolean) ?? true,
+              description: (s.description as string | null) ?? (s.Description as string | null) ?? null,
+            }))
+          : [],
+      });
+
+      const normalized = rawList
+        .filter((x): x is Record<string, unknown> => x != null && typeof x === "object")
+        .map(normalize);
+      console.log("[CATEGORY_MGMT] normalized count", normalized.length);
+      if (normalized.length === 0 && process.env.NODE_ENV === "development") {
+        console.warn(
+          "[CATEGORY_MGMT] categories empty; received shape:",
+          typeof raw,
+          Array.isArray(raw),
+          raw != null && typeof raw === "object" ? Object.keys(raw as object) : null
+        );
+      }
+
+      const q = searchQuery.trim().toLowerCase();
+      const filtered =
+        q === ""
+          ? normalized
+          : normalized.filter((c) => (c.name ?? "").toLowerCase().includes(q));
+      setCategories(filtered);
       setLastRefreshedAt(new Date());
     } catch (error: any) {
       console.error("Failed to load categories:", error);
@@ -138,11 +179,34 @@ export function CategoryManagement({
   };
 
   const loadSubcategories = async (categoryId: number) => {
-    if (!user) return;
     setSubcategoriesLoading(true);
     try {
-      const subs = await getSubcategories(token, categoryId);
-      setSubcategories(subs);
+      const raw = await apiRequest<unknown>(
+        `/api/categories/${categoryId}/subcategories`,
+        { method: "GET", token: token ?? undefined }
+      );
+      console.log("[CATEGORY_MGMT] subcategories raw", raw);
+
+      const rawList = Array.isArray(raw)
+        ? raw
+        : (raw as { items?: unknown[]; data?: unknown[] })?.items ??
+          (raw as { items?: unknown[]; data?: unknown[] })?.data ??
+          [];
+
+      const normalizeSub = (s: Record<string, unknown>): ApiSubcategoryResponse => ({
+        id: (s.id as number) ?? (s.Id as number),
+        categoryId: (s.categoryId as number) ?? (s.CategoryId as number) ?? categoryId,
+        name: (s.name as string) ?? (s.Name as string) ?? "",
+        isActive: (s.isActive as boolean) ?? (s.IsActive as boolean) ?? true,
+        description: (s.description as string | null) ?? (s.Description as string | null) ?? null,
+      });
+
+      const normalized = rawList
+        .filter((x): x is Record<string, unknown> => x != null && typeof x === "object")
+        .map(normalizeSub);
+      console.log("[CATEGORY_MGMT] subcategories normalized count", normalized.length);
+
+      setSubcategories(normalized);
     } catch (error: any) {
       console.error("Failed to load subcategories:", error);
       toast({

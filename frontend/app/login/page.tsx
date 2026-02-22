@@ -158,13 +158,6 @@ export default function LoginPage() {
                 </span>
               )}
             </Button>
-
-            {/* Demo credentials for local testing */}
-            <div className="text-xs text-muted-foreground mt-2 space-y-1">
-              <p>Client: client1@test.com / Test123!</p>
-              <p>Technician: tech1@test.com / Test123!</p>
-              <p>Admin: admin@test.com / Test123!</p>
-            </div>
           </form>
         </div>
       </div>

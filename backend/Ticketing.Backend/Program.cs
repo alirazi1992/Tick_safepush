@@ -73,39 +73,31 @@ if (string.IsNullOrWhiteSpace(builder.Configuration["ASPNETCORE_URLS"]) &&
 var jwtSettings = new JwtSettings();
 builder.Configuration.GetSection("Jwt").Bind(jwtSettings);
 
-// Resolve secret from multiple accepted sources (priority order). Env vars use __ → : mapping (e.g. Jwt__Secret → Jwt:Secret).
-(string? secret, string? sourceKey) ResolveJwtSecret(IConfiguration config)
+// Resolve secret: env vars (Jwt__Secret, TikQ_JWT_SECRET) then config. No hardcoded production secret.
+string? resolvedSecret =
+    Environment.GetEnvironmentVariable("Jwt__Secret")
+    ?? Environment.GetEnvironmentVariable("TikQ_JWT_SECRET")
+    ?? builder.Configuration["Jwt:Secret"];
+
+if (builder.Environment.IsProduction())
 {
-    var candidates = new[]
+    if (string.IsNullOrWhiteSpace(resolvedSecret) || resolvedSecret.Length < 32)
     {
-        (Environment.GetEnvironmentVariable("JWT_SECRET"), "JWT_SECRET (environment)"),
-        (config["Jwt:Secret"], "Jwt:Secret (config / env Jwt__Secret)"),
-        (config["JWT:Secret"], "JWT:Secret (config / env JWT__Secret)"),
-        (config["JwtSettings:Secret"], "JwtSettings:Secret (config / env JwtSettings__Secret)"),
-        (config["Auth:Jwt:Secret"], "Auth:Jwt:Secret (config / env Auth__Jwt__Secret)"),
-    };
-    foreach (var (value, key) in candidates)
-    {
-        if (!string.IsNullOrWhiteSpace(value))
-            return (value.Trim(), key);
+        throw new InvalidOperationException(
+            "JWT secret is not configured for Production. Set Jwt__Secret environment variable."
+        );
     }
-    return (null, null);
+}
+else
+{
+    if (string.IsNullOrWhiteSpace(resolvedSecret))
+    {
+        LogStartup("[STARTUP] Using development-only JWT secret.");
+        resolvedSecret = "DEV_ONLY_SECRET_CHANGE_BEFORE_PRODUCTION_123456";
+    }
 }
 
-var (resolvedSecret, jwtSecretSource) = ResolveJwtSecret(builder.Configuration);
-
-if (string.IsNullOrWhiteSpace(resolvedSecret))
-{
-    if (!builder.Environment.IsDevelopment())
-    {
-        const string acceptedKeys = "Accepted: JWT_SECRET (env), Jwt:Secret or Jwt__Secret (env), JWT:Secret, JwtSettings:Secret, Auth:Jwt:Secret (appsettings or env with __). Example web.config: <environmentVariables><environmentVariable name=\"Jwt__Secret\" value=\"your-secret\" /></environmentVariables>";
-        throw new InvalidOperationException("JWT secret is not configured for production. " + acceptedKeys);
-    }
-    resolvedSecret = "SuperSecretDevelopmentKey!ChangeMe";
-    jwtSecretSource = "development fallback";
-}
-
-LogStartup($"[STARTUP] JWT secret source: {jwtSecretSource}");
+LogStartup($"[STARTUP] JWT secret configured (Production: require env Jwt__Secret; Development: env or dev fallback)");
 
 jwtSettings.Secret = resolvedSecret;
 builder.Services.AddSingleton(jwtSettings);
@@ -926,6 +918,52 @@ static async Task EnsureTicketTechnicianAssignmentsTableExistsAsync(
     catch (Exception ex)
     {
         logger.LogWarning(ex, "[SCHEMA_GUARD] Error checking TicketTechnicianAssignments table: {Error}", ex.Message);
+    }
+}
+
+// =======================
+// Schema Guard: CHECK only — RBAC table must exist (fail fast at startup if missing).
+// Do NOT create the table here; use migrations only.
+// =======================
+static async Task EnsureTechnicianSubcategoryPermissionsTableExistsAsync(AppDbContext context, ILogger logger)
+{
+    logger.LogInformation("[SCHEMA_GUARD] Verifying TechnicianSubcategoryPermissions table exists...");
+
+    var connection = context.Database.GetDbConnection();
+    var wasOpen = connection.State == System.Data.ConnectionState.Open;
+
+    if (!wasOpen)
+    {
+        await connection.OpenAsync();
+    }
+
+    try
+    {
+        bool tableExists = false;
+        using (var checkTableCommand = connection.CreateCommand())
+        {
+            checkTableCommand.CommandText = @"
+                SELECT name FROM sqlite_master
+                WHERE type='table' AND name='TechnicianSubcategoryPermissions';
+            ";
+            var result = await checkTableCommand.ExecuteScalarAsync();
+            tableExists = result != null;
+        }
+
+        if (!tableExists)
+        {
+            logger.LogError("[SCHEMA_GUARD] TechnicianSubcategoryPermissions table is missing. Run database migrations.");
+            throw new InvalidOperationException("RBAC permissions table missing. Run database migrations.");
+        }
+
+        logger.LogInformation("[SCHEMA_GUARD] TechnicianSubcategoryPermissions table exists");
+    }
+    finally
+    {
+        if (!wasOpen)
+        {
+            await connection.CloseAsync();
+        }
     }
 }
 
@@ -1920,6 +1958,17 @@ else
     allowedCorsOrigins ??= Array.Empty<string>();
 }
 
+// [HANDOFF] In Production or ProductionHandoffMode, require CORS origins (fail fast)
+var isProductionOrHandoff = builder.Environment.IsProduction()
+    || Ticketing.Backend.Infrastructure.StartupValidation.IsProductionHandoffMode(builder.Configuration);
+var hasNoOrigins = allowedCorsOrigins == null
+    || allowedCorsOrigins.Length == 0
+    || !allowedCorsOrigins.Any(o => !string.IsNullOrWhiteSpace(o));
+if (isProductionOrHandoff && hasNoOrigins)
+{
+    throw new InvalidOperationException("Cors:AllowedOrigins must be configured in production.");
+}
+
 builder.Services.AddCors(options =>
 {
     if (builder.Environment.IsDevelopment())
@@ -2008,13 +2057,12 @@ try
 {
     var envName = builder.Environment.EnvironmentName;
     var connSource = builder.Configuration.GetConnectionString("DefaultConnection") != null ? "DefaultConnection from config" : "not set";
-    var (jwtSecretForLog, jwtSourceForLog) = ResolveJwtSecret(builder.Configuration);
-    var hasJwtSecret = !string.IsNullOrWhiteSpace(jwtSecretForLog);
+    var hasJwtSecret = !string.IsNullOrWhiteSpace(resolvedSecret);
     LogStartup($"[STARTUP] Environment: {envName}");
     LogStartup($"[STARTUP] Connection string source: {connSource}");
-    LogStartup(hasJwtSecret ? $"[STARTUP] JWT secret configured (source: {jwtSourceForLog})" : "[STARTUP] JWT secret configured: False");
-    if (!hasJwtSecret)
-        LogStartup("[STARTUP] WARNING: JWT secret is missing. In Production this will cause startup to fail.");
+    LogStartup(hasJwtSecret ? "[STARTUP] JWT secret configured." : "[STARTUP] JWT secret configured: False");
+    if (!hasJwtSecret && builder.Environment.IsProduction())
+        LogStartup("[STARTUP] WARNING: JWT secret is missing. Production will fail at startup.");
 }
 catch (Exception ex)
 {
@@ -2059,6 +2107,8 @@ using (var scope = app.Services.CreateScope())
     var context = services.GetRequiredService<AppDbContext>();
     var passwordHasher = services.GetRequiredService<IPasswordHasher<User>>();
     var logger = services.GetRequiredService<ILogger<Program>>();
+    var config = services.GetRequiredService<IConfiguration>();
+    var enableDevSeeding = config.GetValue<bool>("EnableDevSeeding");
 
     try
     {
@@ -2076,7 +2126,8 @@ using (var scope = app.Services.CreateScope())
         logger.LogInformation("[MIGRATION] Pending migrations: {Pending}", string.Join(", ", pendingMigrations));
         
         await context.Database.MigrateAsync();
-        
+        logger.LogInformation("[MIGRATION] MigrateAsync completed; all pending migrations have been applied.");
+
         var appliedAfter = await context.Database.GetAppliedMigrationsAsync();
         logger.LogInformation("[MIGRATION] Migrations after apply: {Applied}", string.Join(", ", appliedAfter));
         logger.LogInformation("[MIGRATION] Database migration completed successfully");
@@ -2103,6 +2154,9 @@ using (var scope = app.Services.CreateScope())
         // Verify TicketTechnicianAssignments table exists (critical for ticket queries)
         await EnsureTicketTechnicianAssignmentsTableExistsAsync(context, logger, sqliteDbPath);
 
+        // Verify TechnicianSubcategoryPermissions table exists (RBAC for Technician/Supervisor ticket listing)
+        await EnsureTechnicianSubcategoryPermissionsTableExistsAsync(context, logger);
+
         // Dev-only SQLite guard for missing ClaimedAtUtc columns
         if (app.Environment.IsDevelopment() &&
             context.Database.ProviderName?.Contains("Sqlite", StringComparison.OrdinalIgnoreCase) == true)
@@ -2119,10 +2173,17 @@ using (var scope = app.Services.CreateScope())
         // Clean up invalid GUIDs in TicketFieldValues
         await CleanupInvalidTicketFieldValuesAsync(context, logger);
 
-        // One-time bootstrap admin when Users table is empty (config: BootstrapAdmin:Email, :Password, :FullName)
-        var config = services.GetRequiredService<IConfiguration>();
-        var requireStrongBootstrap = app.Environment.IsProduction() || Ticketing.Backend.Infrastructure.StartupValidation.IsProductionHandoffMode(config);
-        await BootstrapAdminOnceIfNoUsersAsync(context, passwordHasher, config, logger, requireStrongBootstrap);
+        // One-time bootstrap admin when Users table is empty (config: BootstrapAdmin:Email, :Password, :FullName).
+        // Skip bootstrap when Dev seeding will run so Seed is the single source of truth and we avoid duplicate Users.Email.
+        if (app.Environment.IsDevelopment() || enableDevSeeding)
+        {
+            logger.LogInformation("[BOOTSTRAP] Skipped (Development or EnableDevSeeding); seed will create/update users.");
+        }
+        else
+        {
+            var requireStrongBootstrap = app.Environment.IsProduction() || Ticketing.Backend.Infrastructure.StartupValidation.IsProductionHandoffMode(config);
+            await BootstrapAdminOnceIfNoUsersAsync(context, passwordHasher, config, logger, requireStrongBootstrap);
+        }
     }
     catch (Exception ex)
     {
@@ -2147,15 +2208,13 @@ using (var scope = app.Services.CreateScope())
             throw;
         }
     }
-    
-    var configForSeed = services.GetRequiredService<IConfiguration>();
-    var enableDevSeeding = configForSeed.GetValue<bool>("EnableDevSeeding");
+
     if (app.Environment.IsDevelopment() || enableDevSeeding)
     {
         if (enableDevSeeding && !app.Environment.IsDevelopment())
             logger.LogWarning("[SEED] EnableDevSeeding=true in non-Development environment; running dev seed (Test123! passwords).");
         logger.LogInformation("[SEED] Running seed data initialization...");
-        await SeedData.InitializeAsync(context, passwordHasher);
+        await SeedData.InitializeAsync(context, passwordHasher, logger);
 
         // Sync technicians to identity users: ensure each technician has a User, set password Test123!
         logger.LogInformation("[SEED] Syncing technician users (Technicians → Users)...");
@@ -2183,6 +2242,27 @@ using (var scope = app.Services.CreateScope())
         if (categoryCount == 0)
         {
             logger.LogWarning("[SEED] ⚠️  WARNING: No categories found after seeding! Check SeedData.cs for issues.");
+        }
+
+        var totalLinks = await context.SupervisorTechnicianLinks.CountAsync();
+        logger.LogInformation("[SEED]   SupervisorTechnicianLinks total: {TotalLinks}", totalLinks);
+        if (totalLinks == 0)
+        {
+            logger.LogWarning("[SEED] ⚠️  WARNING: No SupervisorTechnicianLinks! Supervisor list will be empty. Check EnsureSupervisorTechnicianLinksAsync and User emails.");
+        }
+        else
+        {
+            var supervisorEmails = new[] { "supervisor@test.com", "techsuper@email.com" };
+            foreach (var email in supervisorEmails)
+            {
+                var emailLower = email.ToLowerInvariant();
+                var supUser = await context.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Email != null && u.Email.ToLower() == emailLower);
+                if (supUser == null) continue;
+                var linksForSup = await context.SupervisorTechnicianLinks.CountAsync(l => l.SupervisorUserId == supUser.Id);
+                logger.LogInformation("[SEED]   Links for {Email} (UserId={UserId}): {Count}", email, supUser.Id, linksForSup);
+                if (linksForSup == 0)
+                    logger.LogWarning("[SEED] ⚠️  No links for {Email} — supervisor list will be empty for this user.", email);
+            }
         }
     }
     else
@@ -2710,6 +2790,65 @@ app.MapGet("/api/debug/data-status", async (
 })
 .RequireAuthorization("AdminOnly");
 
+// DEBUG: Supervisor config (Development only, Admin only)
+app.MapGet("/api/debug/config/supervisor-mode", (IConfiguration configuration, IWebHostEnvironment env) =>
+{
+    if (!env.IsDevelopment())
+        return Results.NotFound();
+
+    var modeRaw = configuration["SupervisorTechnicians:Mode"]?.Trim();
+    var modeResolved = !string.IsNullOrEmpty(modeRaw) && string.Equals(modeRaw, "LinkedOnly", StringComparison.OrdinalIgnoreCase)
+        ? "LinkedOnly"
+        : (!string.IsNullOrEmpty(modeRaw) && string.Equals(modeRaw, "AllByDefault", StringComparison.OrdinalIgnoreCase))
+            ? "AllByDefault"
+            : "AllByDefault";
+    var section = configuration.GetSection("SupervisorTechnicians");
+    var rawSection = new Dictionary<string, string?>();
+    if (section.Exists())
+    {
+        foreach (var child in section.GetChildren())
+            rawSection[child.Key] = section[child.Key];
+    }
+    return Results.Ok(new
+    {
+        environmentName = env.EnvironmentName,
+        modeResolved,
+        supervisorTechniciansModeRaw = modeRaw ?? "(null/empty)",
+        sourcesLoaded = new[] { "appsettings.json", env.EnvironmentName == "Development" ? "appsettings.Development.json" : null }.Where(x => x != null).ToArray(),
+        supervisorTechnicians = rawSection
+    });
+})
+.RequireAuthorization("AdminOnly");
+
+// DEBUG: Supervisor technicians diagnose (Development only, Admin only)
+app.MapGet("/api/debug/supervisor/technicians/diagnose", async (
+    Ticketing.Backend.Application.Services.ISupervisorService supervisorService,
+    IConfiguration configuration,
+    IWebHostEnvironment env) =>
+{
+    if (!env.IsDevelopment())
+        return Results.NotFound();
+
+    var modeRaw = configuration["SupervisorTechnicians:Mode"]?.Trim();
+    var modeResolved = !string.IsNullOrEmpty(modeRaw) && string.Equals(modeRaw, "LinkedOnly", StringComparison.OrdinalIgnoreCase)
+        ? "LinkedOnly"
+        : (!string.IsNullOrEmpty(modeRaw) && string.Equals(modeRaw, "AllByDefault", StringComparison.OrdinalIgnoreCase))
+            ? "AllByDefault"
+            : "AllByDefault";
+    var diag = await supervisorService.GetSupervisorTechniciansDiagnosticAsync(null);
+    return Results.Ok(new
+    {
+        environmentName = env.EnvironmentName,
+        modeResolved,
+        currentUserId = (Guid?)null,
+        activeTechCount = diag.ActiveTechCount,
+        linkedCount = diag.LinkedCount,
+        sampleActiveTechEmails = diag.SampleActiveTechEmails,
+        sampleLinkedTechIds = diag.SampleLinkedTechIds
+    });
+})
+.RequireAuthorization("AdminOnly");
+
 // Serve static files from App_Data/uploads
 var uploadsPath = Path.Combine(app.Environment.ContentRootPath, "App_Data", "uploads");
 if (Directory.Exists(uploadsPath))
@@ -2853,6 +2992,13 @@ startupLogger.LogInformation("=");
 startupLogger.LogInformation("Backend Server Starting");
 startupLogger.LogInformation("=");
 startupLogger.LogInformation("Environment: {Environment}", app.Environment.EnvironmentName);
+var supervisorModeRaw = app.Configuration["SupervisorTechnicians:Mode"]?.Trim();
+var supervisorModeResolved = !string.IsNullOrEmpty(supervisorModeRaw) && string.Equals(supervisorModeRaw, "LinkedOnly", StringComparison.OrdinalIgnoreCase)
+    ? "LinkedOnly"
+    : (!string.IsNullOrEmpty(supervisorModeRaw) && string.Equals(supervisorModeRaw, "AllByDefault", StringComparison.OrdinalIgnoreCase))
+        ? "AllByDefault"
+        : (app.Environment.IsDevelopment() ? "AllByDefault" : "LinkedOnly");
+startupLogger.LogInformation("[SUPERVISOR_MODE] Environment={Env}, ModeResolved={ModeResolved}, SupervisorTechnicians:Mode(raw)={ModeRaw}", app.Environment.EnvironmentName, supervisorModeResolved, supervisorModeRaw ?? "(null/empty)");
 startupLogger.LogInformation("Listening on: {Urls}", configuredUrls);
 startupLogger.LogInformation("Base URL: {BaseUrl}", baseUrl);
 startupLogger.LogInformation("Port: {Port}", port);

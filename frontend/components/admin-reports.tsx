@@ -40,10 +40,14 @@ import { toGregorianIsoFromJalaliInput } from "@/lib/date-utils";
 import { DateRangePicker } from "@/components/date-range-picker";
 
 type ReportType = "basic" | "analytic";
+type BasicFormat = "csv" | "xlsx";
+type AnalyticFormat = "zip" | "xlsx";
 
 export function AdminReports() {
   const { token, user } = useAuth();
   const [reportType, setReportType] = useState<ReportType>("basic");
+  const [basicFormat, setBasicFormat] = useState<BasicFormat>("xlsx");
+  const [analyticFormat, setAnalyticFormat] = useState<AnalyticFormat>("xlsx");
   const [range, setRange] = useState<ReportRange>("1m");
   const [customRange, setCustomRange] = useState<{ from?: number; to?: number }>({});
   const [loading, setLoading] = useState(false);
@@ -110,7 +114,8 @@ export function AdminReports() {
         to: toIso,
       };
       const type = reportType === "basic" ? "base" : "analytic";
-      await downloadReport({ type, token, params, format: "xlsx" });
+      const format = reportType === "basic" ? basicFormat : analyticFormat;
+      await downloadReport({ type, token, params, format });
       toast({
         title: "موفق",
         description: type === "base" ? "گزارش پایه دانلود شد" : "گزارش تحلیلی دانلود شد",
@@ -185,7 +190,7 @@ export function AdminReports() {
         setTechReportLoading(false);
       }
     },
-    [token, techReportRange, selectedUserId]
+    [token, user, techReportRange, selectedUserId]
   );
 
   useEffect(() => {
@@ -253,7 +258,7 @@ export function AdminReports() {
               لیست تیکت‌ها با جزئیات اصلی
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-3">
             <ul className="text-sm text-muted-foreground space-y-1 font-iran text-right">
               <li>• شماره تیکت</li>
               <li>• عنوان و وضعیت</li>
@@ -261,9 +266,21 @@ export function AdminReports() {
               <li>• نام مشتری و تکنسین</li>
               <li>• تاریخ ایجاد و آخرین بروزرسانی</li>
             </ul>
-            <p className="text-xs text-muted-foreground mt-3 font-iran">
-              فرمت: CSV
+            <p className="text-xs text-muted-foreground font-iran">
+              برای دانلود، بازهٔ زمانی را در پایین انتخاب کنید و دکمهٔ «دانلود گزارش» را بزنید.
             </p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Label className="text-xs font-iran">فرمت:</Label>
+              <Select value={basicFormat} onValueChange={(v: BasicFormat) => setBasicFormat(v)} dir="rtl">
+                <SelectTrigger className="w-[100px] h-8 text-xs font-iran">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="csv">CSV</SelectItem>
+                  <SelectItem value="xlsx">XLSX</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </CardContent>
         </Card>
 
@@ -285,7 +302,7 @@ export function AdminReports() {
               آمار و تحلیل جامع تیکت‌ها
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-3">
             <ul className="text-sm text-muted-foreground space-y-1 font-iran text-right">
               <li>• فراوانی بر حسب دسته‌بندی</li>
               <li>• فراوانی بر حسب مشتری</li>
@@ -293,9 +310,21 @@ export function AdminReports() {
               <li>• تاریخچه تغییر وضعیت</li>
               <li>• مدت زمان هر مرحله</li>
             </ul>
-            <p className="text-xs text-muted-foreground mt-3 font-iran">
-              فرمت: ZIP (شامل چندین فایل CSV)
+            <p className="text-xs text-muted-foreground font-iran">
+              برای دانلود، بازهٔ زمانی را در پایین انتخاب کنید و دکمهٔ «دانلود گزارش» را بزنید.
             </p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Label className="text-xs font-iran">فرمت:</Label>
+              <Select value={analyticFormat} onValueChange={(v: AnalyticFormat) => setAnalyticFormat(v)} dir="rtl">
+                <SelectTrigger className="w-[100px] h-8 text-xs font-iran">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="zip">ZIP</SelectItem>
+                  <SelectItem value="xlsx">XLSX</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -342,7 +371,10 @@ export function AdminReports() {
             )}
           </div>
 
-          <div className="flex justify-end pt-4">
+          <div className="flex justify-end items-center gap-3 pt-4">
+            <span className="text-sm text-muted-foreground font-iran">
+              {reportType === "basic" ? "گزارش پایه" : "گزارش تحلیلی"}
+            </span>
             <Button
               onClick={handleDownload}
               disabled={loading}

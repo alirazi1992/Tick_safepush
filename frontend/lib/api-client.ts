@@ -83,7 +83,8 @@ async function testApiUrl(baseUrl: string, timeout = 2000): Promise<boolean> {
       method: "GET",
       signal: controller.signal,
       cache: "no-store",
-      mode: "cors", // Explicitly set CORS mode
+      mode: "cors",
+      credentials: "include",
     });
     
     clearTimeout(timeoutId);
@@ -159,7 +160,20 @@ function shouldPingHealth(key: string): boolean {
   return true;
 }
 
+/** In production, NEXT_PUBLIC_API_BASE_URL must be set and an absolute URL. Throws if not. */
+function requireProductionApiBaseUrl(): void {
+  if (process.env.NODE_ENV !== "production") return;
+  const raw = process.env.NEXT_PUBLIC_API_BASE_URL;
+  const trimmed = typeof raw === "string" ? raw.trim() : "";
+  if (!trimmed || !/^https?:\/\//i.test(trimmed)) {
+    throw new Error("NEXT_PUBLIC_API_BASE_URL is required in production and must be an absolute URL.");
+  }
+}
+
 export async function getApiBaseUrl(): Promise<string> {
+  // Production: fail fast if env missing or not absolute; no localhost fallback.
+  requireProductionApiBaseUrl();
+
   // Production must be env-driven. Auto-detect is dev-only.
   const envBase = normalizeBaseUrl(process.env.NEXT_PUBLIC_API_BASE_URL);
   if (envBase) {
@@ -185,6 +199,9 @@ export async function getApiBaseUrl(): Promise<string> {
 
   const fallback = getDefaultApiBaseUrl();
   if (!API_BASE_URL || (!API_BASE_URL.startsWith("http://") && !API_BASE_URL.startsWith("https://"))) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("NEXT_PUBLIC_API_BASE_URL is required in production and must be an absolute URL.");
+    }
     if (fallback) {
       console.warn("[api-client] Invalid URL, using dev default:", fallback);
       API_BASE_URL = fallback;
@@ -248,6 +265,7 @@ async function pingApiHealth(baseUrl: string): Promise<{ ok: boolean; status?: n
       signal: controller.signal,
       cache: "no-store",
       mode: "cors",
+      credentials: "include",
     });
     clearTimeout(timeoutId);
     return { ok: res.ok, status: res.status, url: healthUrl };
@@ -311,8 +329,12 @@ export async function apiRequest<TResponse>(
   const { method = "GET", token, body, silent = false } = options;
 
   // Get the resolved API base URL (with automatic detection)
-  const baseUrl = await getApiBaseUrl();
-  
+  let baseUrl = await getApiBaseUrl();
+  // In dev, never use empty base so we always hit backend (e.g. http://localhost:5000), not same-origin
+  if (process.env.NODE_ENV === "development" && !normalizeBaseUrl(baseUrl)) {
+    baseUrl = getDefaultApiBaseUrl();
+  }
+
   let url: string;
   let requestPath: string;
   let effectiveBase = "";
@@ -358,14 +380,16 @@ export async function apiRequest<TResponse>(
   // GUARD: Ensure base URL is absolute
   effectiveBase = normalizedBase;
   if (!effectiveBase || (!effectiveBase.startsWith("http://") && !effectiveBase.startsWith("https://"))) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("NEXT_PUBLIC_API_BASE_URL is required in production and must be an absolute URL.");
+    }
     const error = new Error(`[api-client] FORBIDDEN: API base URL is not absolute. Base: "${effectiveBase}", Path: ${apiPath}. This will cause relative URL requests. Call stack: ${new Error().stack}`);
     console.error(error);
-    if (process.env.NODE_ENV === "development") {
-      throw error;
+    effectiveBase = getDefaultApiBaseUrl() || "";
+    if (effectiveBase) {
+      console.warn(`[api-client] Using dev default base URL: ${effectiveBase}`);
     }
-    // Fallback to default in production
-    effectiveBase = "http://localhost:5000";
-    console.warn(`[api-client] Using fallback base URL: ${effectiveBase}`);
+    if (!effectiveBase) throw error;
   }
 
   url = joinApi(effectiveBase, apiPath);
@@ -431,10 +455,11 @@ export async function apiRequest<TResponse>(
     // If using proxy, the proxy handles fallback automatically
     // Only retry with direct connection if not using proxy
     if (
+      process.env.NODE_ENV === "development" &&
       !USE_PROXY &&
-      (error.name === "AbortError" || 
-       error.message?.includes("Failed to fetch") || 
-       error.message?.includes("NetworkError") || 
+      (error.name === "AbortError" ||
+       error.message?.includes("Failed to fetch") ||
+       error.message?.includes("NetworkError") ||
        error.name === "TypeError") &&
       baseUrl === "http://localhost:5000" &&
       !isDetectionInProgress()
@@ -640,6 +665,18 @@ export async function apiRequest<TResponse>(
   if (res.status === 204) {
     // No Content
     return undefined as TResponse;
+  }
+
+  // In dev, read as text first to log raw body (proves URL/status/body for supervisor technician debugging)
+  if (process.env.NODE_ENV === "development") {
+    const rawText = await res.text();
+    console.log(`[apiRequest] ${method} ${url} → ${res.status} response (first 800 chars):`, rawText.slice(0, 800));
+    try {
+      return (rawText ? JSON.parse(rawText) : undefined) as TResponse;
+    } catch (e) {
+      console.warn("[apiRequest] JSON parse failed for success response", e);
+      return undefined as TResponse;
+    }
   }
 
   return (await res.json()) as TResponse;
