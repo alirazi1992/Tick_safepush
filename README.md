@@ -69,7 +69,7 @@ When Company Directory is enabled, the application enforces read-only use of the
 TikQ is intended for deployment on the organization’s internal network. The backend and frontend can be hosted on internal servers; no outbound dependency on public internet services is required.
 
 **Environment configuration**  
-Production deployment requires explicit configuration: JWT secret, production database connection, and—if Company Directory is used—connection string and mode. Debug and maintenance endpoints are disabled in production. See **docs/DEPLOYMENT_REQUIRED_CONFIG.md** for required environment variables, database responsibilities, and failure scenarios.
+Production deployment requires explicit configuration: JWT secret, production database connection, and—if Company Directory is used—connection string and mode. Debug and maintenance endpoints are disabled in production. See **docs/01_Runbook/DEPLOYMENT_REQUIRED_CONFIG.md** for required environment variables, database responsibilities, and failure scenarios.
 
 **No internet dependency**  
 Core operation does not depend on external APIs or third-party SaaS. Optional features (e.g. email) can be configured if the organization chooses.
@@ -99,9 +99,9 @@ All role assignments (Admin, Technician, Client) and application permissions are
 
 | Document | Purpose |
 |----------|---------|
-| **docs/DEPLOYMENT_REQUIRED_CONFIG.md** | Required environment variables, database roles, security and deployment options, common failure scenarios, first-run behavior. |
-| **docs/HANDOFF_READINESS_CHECKLIST.md** | Pre-handoff and pre-production checklist. |
+| **docs/01_Runbook/DEPLOYMENT_REQUIRED_CONFIG.md** | Required environment variables, database roles, security and deployment options, common failure scenarios, first-run behavior. |
+| **docs/04_Handoff/HANDOFF_READINESS_CHECKLIST.md** | Pre-handoff and pre-production checklist. |
 | **docs/HANDOFF_DIFF_SUMMARY.md** | Summary of production-hardening changes. |
-| **docs/HANDOFF_WHAT_COULD_STILL_FAIL.md** | Risks and considerations after handoff. |
+| **docs/04_Handoff/HANDOFF_WHAT_COULD_STILL_FAIL.md** | Risks and considerations after handoff. |
 
 Development and debugging notes have been archived under **docs/archive/dev-history/** and are not part of the delivery set.

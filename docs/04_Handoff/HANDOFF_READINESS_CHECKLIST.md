@@ -33,7 +33,7 @@ Use this checklist before organizational source-code handoff and before deployin
 
 ## 6. Documentation
 
-- [ ] **docs/DEPLOYMENT_REQUIRED_CONFIG.md** present and reviewed (env vars, DB usage, roles, Company DB read-only, ProductionHandoffMode, common failures).
+- [ ] **docs/01_Runbook/DEPLOYMENT_REQUIRED_CONFIG.md** present and reviewed (env vars, DB usage, roles, Company DB read-only, ProductionHandoffMode, common failures).
 
 ## 7. Documentation and comment cleanup
 

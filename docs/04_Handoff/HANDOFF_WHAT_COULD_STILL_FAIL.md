@@ -45,4 +45,4 @@ This list covers risks that remain after the hardening work. It is for the recei
 
 ---
 
-**Recommendation**: Run a staged deployment (e.g. staging with ProductionHandoffMode and real Company DB read-only user), then production, and use the Handoff Readiness Checklist and DEPLOYMENT_REQUIRED_CONFIG.md for each step.
+**Recommendation**: Run a staged deployment (e.g. staging with ProductionHandoffMode and real Company DB read-only user), then production, and use the [Handoff Readiness Checklist](docs/04_Handoff/HANDOFF_READINESS_CHECKLIST.md) and [DEPLOYMENT_REQUIRED_CONFIG.md](docs/01_Runbook/DEPLOYMENT_REQUIRED_CONFIG.md) for each step.

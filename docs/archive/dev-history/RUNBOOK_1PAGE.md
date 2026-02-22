@@ -8,6 +8,7 @@
 
 ## Environment variables (Backend - IIS web.config)
 - Jwt__Secret : required
+- Production requires Cors:AllowedOrigins=["<frontend-origin>"] (e.g. https://your-frontend).
 - Bootstrap (first run only when Users table is empty):
   - TikQ_BOOTSTRAP_ADMIN_PASSWORD / EMAIL
   - TikQ_BOOTSTRAP_CLIENT_PASSWORD / EMAIL

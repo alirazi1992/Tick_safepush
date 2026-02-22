@@ -2,6 +2,8 @@
 
 This document describes the configuration required to deploy TikQ in production (intranet) and, when used, to connect it to the organization’s Company/Directory database. It is intended for system administrators and infrastructure teams.
 
+**SonarQube scanning** is optional and not required for build or deploy. The repository may include or omit SonarQube/SonarScanner artifacts; they do not affect runtime behavior.
+
 ---
 
 ## Dual User Stores
@@ -53,9 +55,15 @@ When the main server or directory is unavailable, an **emergency admin** (break-
 - **To use SQL Server**: Set `ConnectionStrings:DefaultConnection` to your SQL Server connection string.  
 - **To allow SQLite in Production** (e.g. for testing only): Set `AllowSqliteInProduction=true` in config.
 
+**CORS (mandatory in production)**  
+- **Production requires** `Cors:AllowedOrigins=["<frontend-origin>"]` (e.g. your frontend URL). If empty or missing in Production or when `ProductionHandoffMode=true`, startup fails with: "Cors:AllowedOrigins must be configured in production."
+
 **Production flags**  
 - **ASPNETCORE_ENVIRONMENT**: Set to `Production` on the production host so that production validation and SQLite rejection run.  
 - **ProductionHandoffMode** (optional): When set to `true`, the app applies production-style validation and disables debug/maintenance endpoints even if environment is not Production.
+
+**Bootstrap admin (when DB is empty)**  
+- **BootstrapAdmin__Password** must be provided securely in production when the database has no users (e.g. via environment variable or `appsettings.Production.json`). Do not commit this value to source control.
 
 ---
 
@@ -107,7 +115,7 @@ TikQ supports email/password login against the TikQ database. This can be used a
 | Scenario | Cause | Action |
 |----------|--------|--------|
 | **Missing role** | User exists in Company DB but has no user or role in TikQ (e.g. in Enforce mode). | Provision the user in TikQ and assign a role (Admin, Technician, or Client). |
-| **Missing config** | JWT secret not set in production; or Company Directory enabled but connection string or Mode missing. | Set `JWT_SECRET` (or `Jwt:Secret`); if using Company Directory, set `CompanyDirectory:ConnectionString` and `CompanyDirectory:Mode`, or set `CompanyDirectory:Enabled=false`. |
+| **Missing config** | JWT secret not set in production; or Company Directory enabled but connection string or Mode missing; or CORS origins empty in production. | Set `JWT_SECRET` (or `Jwt:Secret`); if using Company Directory, set `CompanyDirectory:ConnectionString` and `CompanyDirectory:Mode`, or set `CompanyDirectory:Enabled=false`; set `Cors:AllowedOrigins` to your frontend origin(s). |
 | **Company DB unavailable** | Company Directory is enabled but the directory database is down or unreachable. | Restore directory availability, or temporarily disable Company Directory; ensure timeouts and monitoring are in place. |
 | **SQLite in production** | Main app database is SQLite and `AllowSqliteInProduction` is not set. | Set `ConnectionStrings:DefaultConnection` to SQL Server (or intended DB), or set `AllowSqliteInProduction=true` only if acceptable for the environment. |
 | **Bootstrap admin password** | No users in DB and bootstrap would run, but `BootstrapAdmin:Password` is missing or shorter than 8 characters. | Set `BootstrapAdmin:Email`, `BootstrapAdmin:Password` (min 8 chars), and `BootstrapAdmin:FullName` when using bootstrap for first user. |
@@ -117,7 +125,8 @@ TikQ supports email/password login against the TikQ database. This can be used a
 - *"CompanyDirectory:ConnectionString is empty"* — Set the connection string or set `CompanyDirectory:Enabled=false`.  
 - *"CompanyDirectory:Mode must be one of: Enforce, Optional, Friendly"* — Set `CompanyDirectory:Mode` accordingly.  
 - *"SQLite is not allowed as the main app database in Production"* — Use SQL Server (or set `AllowSqliteInProduction=true` if acceptable).  
-- *"BootstrapAdmin:Password is missing or too short"* — Set bootstrap admin config when the database has no users.
+- *"BootstrapAdmin:Password is missing or too short"* — Set bootstrap admin config when the database has no users.  
+- *"Cors:AllowedOrigins must be configured in production"* — Set `Cors:AllowedOrigins` in appsettings (e.g. `["https://your-frontend"]`).
 
 ---
 
@@ -143,4 +152,5 @@ Demo seed data (e.g. test users with known passwords like `Test123!`) runs only 
 - [ ] Bootstrap admin password (if used) is strong and from config/env, not a default.  
 - [ ] If Emergency Admin is enabled: `EmergencyAdmin:Email`, `EmergencyAdmin:Password` (min 8 chars), and `EmergencyAdmin:Key` are set (via env in Production).  
 - [ ] Dev seeding and debug endpoints are disabled (default when not in Development and not `EnableDevSeeding`).  
-- [ ] Startup log shows `[HANDOFF] Production validation passed` when running in Production or with `ProductionHandoffMode=true`.
+- [ ] Startup log shows `[HANDOFF] Production validation passed` when running in Production or with `ProductionHandoffMode=true`.  
+- [ ] `Cors:AllowedOrigins` is set to your frontend origin(s) (required in production).

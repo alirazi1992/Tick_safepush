@@ -39,8 +39,8 @@ Minimal, targeted guards for production handoff. No architecture redesign, no un
 
 | File | Change | Why |
 |------|--------|-----|
-| `docs/DEPLOYMENT_REQUIRED_CONFIG.md` | **New**. Required env/config (JWT, CompanyDirectory, DB, bootstrap, dev seeding), which DB is prod, roles in TikQ only, Company DB read-only, ProductionHandoffMode, common failure messages. | Delivery doc for deployers. |
-| `docs/HANDOFF_READINESS_CHECKLIST.md` | **New**. Checklist for production config, bootstrap, auth, Company DB read-only, dev surfaces, docs, AI trace, verification. | Handoff sign-off. |
+| `docs/01_Runbook/DEPLOYMENT_REQUIRED_CONFIG.md` | **New**. Required env/config (JWT, CompanyDirectory, DB, bootstrap, dev seeding), which DB is prod, roles in TikQ only, Company DB read-only, ProductionHandoffMode, common failure messages. | Delivery doc for deployers. |
+| `docs/04_Handoff/HANDOFF_READINESS_CHECKLIST.md` | **New**. Checklist for production config, bootstrap, auth, Company DB read-only, dev surfaces, docs, AI trace, verification. | Handoff sign-off. |
 | `docs/HANDOFF_DIFF_SUMMARY.md` | **New**. This file. | Diff-style summary of changes. |
 | `.vscode/settings.json` | Comment updated to "Editor indexing". | Documentation cleanup (comment only). |
 
