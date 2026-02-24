@@ -1,10 +1,13 @@
 using System;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Ticketing.Backend.Infrastructure.Data;
 
 #nullable disable
 
 namespace Ticketing.Backend.Infrastructure.Data.Migrations
 {
+    // Discovery attributes added for SQL Server EF migration discovery.
     public partial class AddNotificationReadFields : Migration
     {
         protected override void Up(MigrationBuilder migrationBuilder)
@@ -12,13 +15,11 @@ namespace Ticketing.Backend.Infrastructure.Data.Migrations
             migrationBuilder.AddColumn<DateTime>(
                 name: "ReadAt",
                 table: "Notifications",
-                type: "TEXT",
                 nullable: true);
 
             migrationBuilder.AddColumn<Guid>(
                 name: "RelatedTicketId",
                 table: "Notifications",
-                type: "TEXT",
                 nullable: true);
         }
 

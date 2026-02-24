@@ -1,10 +1,18 @@
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Ticketing.Backend.Infrastructure.Data;
 
 #nullable disable
 
 namespace Ticketing.Backend.Infrastructure.Data.Migrations
 {
     /// <inheritdoc />
+    /// <summary>
+    /// Adds LockoutEnabled, LockoutEnd, SecurityStamp to Users for seed/lockout support.
+    /// Smoke test: reset-tikq-db.ps1 -Force; set Database__Provider=SqlServer and ConnectionStrings__DefaultConnection; dotnet run.
+    /// </summary>
+    [DbContext(typeof(AppDbContext))]
+    [Migration("20260131000000_AddUserLockoutColumns")]
     public partial class AddUserLockoutColumns : Migration
     {
         /// <inheritdoc />
@@ -14,7 +22,6 @@ namespace Ticketing.Backend.Infrastructure.Data.Migrations
             migrationBuilder.AddColumn<bool>(
                 name: "LockoutEnabled",
                 table: "Users",
-                type: "INTEGER",
                 nullable: false,
                 defaultValue: false);
 
@@ -22,14 +29,13 @@ namespace Ticketing.Backend.Infrastructure.Data.Migrations
             migrationBuilder.AddColumn<DateTimeOffset>(
                 name: "LockoutEnd",
                 table: "Users",
-                type: "TEXT",
                 nullable: true);
 
-            // Add SecurityStamp column (nullable)
+            // Add SecurityStamp column (nullable, max 256 to match entity)
             migrationBuilder.AddColumn<string>(
                 name: "SecurityStamp",
                 table: "Users",
-                type: "TEXT",
+                maxLength: 256,
                 nullable: true);
         }
 

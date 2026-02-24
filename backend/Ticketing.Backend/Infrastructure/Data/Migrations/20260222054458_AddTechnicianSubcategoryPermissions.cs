@@ -1,10 +1,13 @@
 using System;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Ticketing.Backend.Infrastructure.Data;
 
 #nullable disable
 
 namespace Ticketing.Backend.Infrastructure.Data.Migrations
 {
+    // Discovery attributes added for SQL Server EF migration discovery.
     /// <inheritdoc />
     public partial class AddTechnicianSubcategoryPermissions : Migration
     {
@@ -15,11 +18,11 @@ namespace Ticketing.Backend.Infrastructure.Data.Migrations
                 name: "TechnicianSubcategoryPermissions",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    TechnicianId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    SubcategoryId = table.Column<int>(type: "INTEGER", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "TEXT", nullable: true)
+                    Id = table.Column<Guid>(nullable: false),
+                    TechnicianId = table.Column<Guid>(nullable: false),
+                    SubcategoryId = table.Column<int>(nullable: false),
+                    CreatedAt = table.Column<DateTime>(nullable: false),
+                    UpdatedAt = table.Column<DateTime>(nullable: true)
                 },
                 constraints: table =>
                 {

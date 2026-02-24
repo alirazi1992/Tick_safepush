@@ -52,7 +52,7 @@ public class FieldDefinitionService : IFieldDefinitionService
             ? await _unitOfWork.FieldDefinitions.GetBySubcategoryIdAsync(subcategoryId.Value, includeInactive: false)
             : new List<SubcategoryFieldDefinition>();
 
-        var subKeys = subcategoryFields.Select(f => f.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var subKeys = subcategoryFields.Select(f => f.FieldKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var merged = categoryFields
             .Where(cf => !subKeys.Contains(cf.Key))
             .Select(MapCategoryToResponse)
@@ -109,7 +109,7 @@ public class FieldDefinitionService : IFieldDefinitionService
             SubcategoryId = subcategoryId,
             Name = request.Name,
             Label = request.Label,
-            Key = request.Key,
+            FieldKey = request.Key,
             Type = fieldType,
             IsRequired = isRequiredValue, // Explicitly set from request (false or true)
             DefaultValue = request.DefaultValue,
@@ -130,8 +130,8 @@ public class FieldDefinitionService : IFieldDefinitionService
         }
         
         // Log the field being created for debugging
-        _logger.LogDebug("Creating field: Name={Name}, Key={Key}, IsRequired={IsRequired}, Type={Type}", 
-            field.Name, field.Key, field.IsRequired, field.Type);
+        _logger.LogDebug("Creating field: Name={Name}, FieldKey={FieldKey}, IsRequired={IsRequired}, Type={Type}", 
+            field.Name, field.FieldKey, field.IsRequired, field.Type);
 
         await _unitOfWork.FieldDefinitions.AddAsync(field);
         await _unitOfWork.SaveChangesAsync();
@@ -203,7 +203,7 @@ public class FieldDefinitionService : IFieldDefinitionService
                 SubcategoryId = sub.Id,
                 Name = request.Name,
                 Label = request.Label,
-                Key = request.Key,
+                FieldKey = request.Key,
                 Type = fieldType,
                 IsRequired = request.IsRequired,
                 DefaultValue = request.DefaultValue,
@@ -270,12 +270,12 @@ public class FieldDefinitionService : IFieldDefinitionService
             foreach (var sub in subcategories)
             {
                 var subFields = await _unitOfWork.FieldDefinitions.GetBySubcategoryIdAsync(sub.Id, includeInactive: true);
-                var subField = subFields.FirstOrDefault(f => f.Key == oldKey);
+                var subField = subFields.FirstOrDefault(f => f.FieldKey == oldKey);
                 if (subField == null) continue;
 
                 subField.Name = categoryField.Name;
                 subField.Label = categoryField.Label;
-                subField.Key = categoryField.Key;
+                subField.FieldKey = categoryField.Key;
                 subField.Type = categoryField.Type;
                 subField.IsRequired = categoryField.IsRequired;
                 subField.DefaultValue = categoryField.DefaultValue;
@@ -295,7 +295,7 @@ public class FieldDefinitionService : IFieldDefinitionService
         }
 
         // Check for duplicate key (if key is being changed)
-        if (request.Key != null && request.Key != field.Key)
+        if (request.Key != null && request.Key != field.FieldKey)
         {
             var exists = await _unitOfWork.FieldDefinitions.ExistsAsync(field.SubcategoryId, request.Key);
             if (exists)
@@ -307,7 +307,7 @@ public class FieldDefinitionService : IFieldDefinitionService
         // Update fields
         if (request.Name != null) field.Name = request.Name;
         if (request.Label != null) field.Label = request.Label;
-        if (request.Key != null) field.Key = request.Key;
+        if (request.Key != null) field.FieldKey = request.Key;
         if (!string.IsNullOrWhiteSpace(request.Type))
         {
             if (!Enum.TryParse<FieldType>(request.Type, ignoreCase: true, out var fieldType))
@@ -366,7 +366,7 @@ public class FieldDefinitionService : IFieldDefinitionService
         foreach (var sub in subcategories)
         {
             var subFields = await _unitOfWork.FieldDefinitions.GetBySubcategoryIdAsync(sub.Id, includeInactive: true);
-            var subField = subFields.FirstOrDefault(f => f.Key == categoryField.Key);
+            var subField = subFields.FirstOrDefault(f => f.FieldKey == categoryField.Key);
             if (subField == null) continue;
 
             subField.IsActive = false;
@@ -401,7 +401,7 @@ public class FieldDefinitionService : IFieldDefinitionService
             SubcategoryId = field.SubcategoryId,
             Name = field.Name,
             Label = field.Label,
-            Key = field.Key,
+            Key = field.FieldKey,
             Type = field.Type.ToString(),
             IsRequired = field.IsRequired,
             DefaultValue = field.DefaultValue,

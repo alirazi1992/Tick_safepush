@@ -1,7 +1,21 @@
 #Requires -Version 5.1
-# TikQ Backend - IIS deployment script (production-safe, idempotent)
+# TikQ Backend - IIS deployment script (production-safe, idempotent, atomic)
 # Run from: same folder as Ticketing.Backend.csproj (or any folder; uses $PSScriptRoot for project path)
+#
+# Stdout/app logs: written to <PublishDir>\logs (see step 13; check there if health check fails).
+#
+# Atomic deployment (avoids file locks):
+#   1. Publish to a new versioned folder: C:\publish\tikq-backend-<timestamp>
+#   2. Configure and set permissions on that folder only (no in-place overwrite)
+#   3. Switch IIS site physical path to the new folder (single atomic switch)
+#   4. Recycle application pool so the app loads from the new path
+#   5. Optionally keep last N versioned folders and remove older ones (cleanup)
+param(
+    [int]$KeepLastNFolders = 5
+)
+
 $ErrorActionPreference = "Stop"
+# KeepLastNFolders: after successful deploy, keep this many tikq-backend-* folders in C:\publish and remove older ones. Set to 0 to skip cleanup.
 
 # --- Config (safe variable names; no secrets) ---
 $AppPoolName     = "TikQ"
@@ -17,12 +31,28 @@ $Timestamp       = Get-Date -Format "yyyyMMdd-HHmmss"
 $PublishDir      = Join-Path $PublishRoot "tikq-backend-$Timestamp"
 
 # --- Helpers ---
-function Write-Step { param([string]$Message) Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $Message" }
-function Ensure-Dir  { param([string]$Path) if (-not (Test-Path $Path)) { New-Item -ItemType Directory -Path $Path -Force | Out-Null; Write-Step "Created: $Path" } }
+function Write-Step { param([string]$Message) 
+$ErrorActionPreference = "Stop"
+Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $Message" }
+function Ensure-Dir  { param([string]$Path) 
+$ErrorActionPreference = "Stop"
+if (-not (Test-Path $Path)) { New-Item -ItemType Directory -Path $Path -Force | Out-Null; Write-Step "Created: $Path" } }
+
+# Redact password in connection strings for safe logging (never print secrets).
+function Redact-ConnectionString {
+    param([string]$Value)
+    
+$ErrorActionPreference = "Stop"
+if ([string]::IsNullOrEmpty($Value)) { return "" }
+    if ($Value -match 'Password\s*=\s*[^;]+') { return $Value -replace 'Password\s*=\s*[^;]+', 'Password=***' }
+    return $Value
+}
 
 function Grant-AppPoolFullControl {
     param([string]$TargetPath, [string]$AppPoolName)
-    $principal = "IIS AppPool\${AppPoolName}"
+    
+$ErrorActionPreference = "Stop"
+$principal = "IIS AppPool\${AppPoolName}"
     # Use -f to avoid PowerShell parsing "$principal:(OI)(CI)F" as invalid variable scope
     $grantArg = "{0}:(OI)(CI)F" -f $principal
     icacls $TargetPath /grant $grantArg
@@ -122,6 +152,45 @@ if ($bootstrapSupervisorPassword) {
     Write-Step "Bootstrap supervisor env vars present; will inject (password length >= $MinBootstrapPasswordLength, email set)."
 }
 
+# --- 1c. Database provider and connection (required for IIS; read from Process/Machine/User) ---
+$DatabaseProviderEnvVar       = "Database__Provider"
+$ConnectionStringEnvVar       = "ConnectionStrings__DefaultConnection"
+$AutoMigrateOnStartupEnvVar   = "Database__AutoMigrateOnStartup"
+
+function Get-EnvVar {
+    param(
+        [Parameter(Mandatory=$true)][string]$Name,
+        [string[]]$Scopes = @("Process","Machine","User")
+    )
+
+    foreach ($scope in $Scopes) {
+        $v = [Environment]::GetEnvironmentVariable($Name, $scope)
+        if (-not [string]::IsNullOrWhiteSpace($v)) { return $v.Trim() }
+    }
+    return $null
+}
+
+$databaseProvider = Get-EnvVar -Name $DatabaseProviderEnvVar
+if ([string]::IsNullOrWhiteSpace($databaseProvider)) { $databaseProvider = "SqlServer" }
+
+$databaseProvider = $databaseProvider.Trim()
+
+$connectionString = Get-EnvVar -Name $ConnectionStringEnvVar
+$autoMigrateOnStartup = Get-EnvVar -Name $AutoMigrateOnStartupEnvVar
+# When SqlServer and not set, default to true so first deploy runs migrations
+if ($databaseProvider -eq "SqlServer" -and [string]::IsNullOrWhiteSpace($autoMigrateOnStartup)) {
+    $autoMigrateOnStartup = "true"
+}
+
+if ($databaseProvider -eq "SqlServer" -and [string]::IsNullOrWhiteSpace($connectionString)) {
+    Write-Host "ERROR: Database__Provider is 'SqlServer' but ConnectionStrings__DefaultConnection is not set. Set the connection string (e.g. [Environment]::SetEnvironmentVariable('ConnectionStrings__DefaultConnection','Server=...;Database=TikQ;...','Machine'))." -ForegroundColor Red
+    throw "Validation failed: SqlServer requires ConnectionStrings__DefaultConnection."
+}
+Write-Step "Database provider: $databaseProvider (connection string present: $(-not [string]::IsNullOrWhiteSpace($connectionString)), AutoMigrateOnStartup: $autoMigrateOnStartup)."
+if (-not [string]::IsNullOrWhiteSpace($connectionString)) {
+    Write-Step "Connection string (redacted): $(Redact-ConnectionString $connectionString)"
+}
+
 # --- 2. Ensure publish root ---
 Ensure-Dir $PublishRoot
 
@@ -145,23 +214,33 @@ $aspNetCore = $webConfig.configuration.location.'system.webServer'.aspNetCore
 if (-not $aspNetCore) { $aspNetCore = $webConfig.configuration.'system.webServer'.aspNetCore }
 if (-not $aspNetCore) { throw "Could not find aspNetCore node in web.config" }
 
-# Build hashtable of name -> value to inject (never log values)
+# Build hashtable of name -> value to inject (never log secret values)
 $varsToInject = @{ "Jwt__Secret" = $secret }
+
+# Database: provider, connection string, auto-migrate (required for reliable SQL Server on IIS)
+$varsToInject["Database__Provider"] = $databaseProvider
+if (-not [string]::IsNullOrWhiteSpace($connectionString)) {
+    $varsToInject["ConnectionStrings__DefaultConnection"] = $connectionString
+}
+$varsToInject["Database__AutoMigrateOnStartup"] = $autoMigrateOnStartup
+
+# Bootstrap: inject Bootstrap__* so app's BootstrapOptions see them (production-safe, idempotent when users empty)
 if ($bootstrapAdminPassword) {
-    $varsToInject["TikQ_BOOTSTRAP_ADMIN_PASSWORD"] = $bootstrapAdminPassword
-    $varsToInject["TikQ_BOOTSTRAP_ADMIN_EMAIL"]    = $bootstrapAdminEmail
+    $varsToInject["Bootstrap__Enabled"] = "true"
+    $varsToInject["Bootstrap__AdminEmail"] = $bootstrapAdminEmail
+    $varsToInject["Bootstrap__AdminPassword"] = $bootstrapAdminPassword
 }
 if ($bootstrapClientPassword) {
-    $varsToInject["TikQ_BOOTSTRAP_CLIENT_PASSWORD"] = $bootstrapClientPassword
-    $varsToInject["TikQ_BOOTSTRAP_CLIENT_EMAIL"]    = $bootstrapClientEmail
+    $varsToInject["Bootstrap__TestClientEmail"] = $bootstrapClientEmail
+    $varsToInject["Bootstrap__TestClientPassword"] = $bootstrapClientPassword
 }
 if ($bootstrapTechPassword) {
-    $varsToInject["TikQ_BOOTSTRAP_TECH_PASSWORD"] = $bootstrapTechPassword
-    $varsToInject["TikQ_BOOTSTRAP_TECH_EMAIL"]    = $bootstrapTechEmail
+    $varsToInject["Bootstrap__TestTechEmail"] = $bootstrapTechEmail
+    $varsToInject["Bootstrap__TestTechPassword"] = $bootstrapTechPassword
 }
 if ($bootstrapSupervisorPassword) {
-    $varsToInject["TikQ_BOOTSTRAP_SUPERVISOR_PASSWORD"] = $bootstrapSupervisorPassword
-    $varsToInject["TikQ_BOOTSTRAP_SUPERVISOR_EMAIL"]    = $bootstrapSupervisorEmail
+    $varsToInject["Bootstrap__TestSupervisorEmail"] = $bootstrapSupervisorEmail
+    $varsToInject["Bootstrap__TestSupervisorPassword"] = $bootstrapSupervisorPassword
 }
 
 # Ensure <environmentVariables> exists under <aspNetCore>
@@ -185,21 +264,12 @@ foreach ($varName in $varsToInject.Keys) {
     }
 }
 
-# Ensure ConnectionStrings__DefaultConnection in <environmentVariables> (add only if missing)
-$connStrName = "ConnectionStrings__DefaultConnection"
-$connStrValue = "Data Source=C:\TikQData\ticketing.db"
-$existingConnStr = $envVars.environmentVariable | Where-Object { $_.name -eq $connStrName }
-if (-not $existingConnStr) {
-    $elConn = $webConfig.CreateElement("environmentVariable")
-    $elConn.SetAttribute("name", $connStrName)
-    $elConn.SetAttribute("value", $connStrValue)
-    [void]$envVars.AppendChild($elConn)
-}
-
 $webConfig.Save($WebConfigPath)
+# Validate: never log secret values (only keys and redacted connection string)
 $injectedNames = $varsToInject.Keys -join ", "
-$lengths = ($varsToInject.GetEnumerator() | ForEach-Object { "$($_.Key).Length=$($_.Value.Length)" }) -join "; "
-Write-Step "Injected into web.config: $injectedNames ($lengths)."
+$secretKeyNames = @("Jwt__Secret", "ConnectionStrings__DefaultConnection", "Bootstrap__AdminPassword", "Bootstrap__TestClientPassword", "Bootstrap__TestTechPassword", "Bootstrap__TestSupervisorPassword")
+$hasSecrets = ($varsToInject.Keys | Where-Object { $_ -in $secretKeyNames }).Count -gt 0
+Write-Step "Injected into web.config: $injectedNames" + $(if ($hasSecrets) { " (secret keys present; values redacted, never logged)." } else { "." })
 
 # --- 6. Grant full control to IIS AppPool identity ---
 Write-Step "Granting permissions to IIS AppPool\${AppPoolName} on $PublishDir ..."
@@ -216,13 +286,13 @@ if (-not (Get-Module -ListAvailable -Name WebAdministration)) {
 }
 Import-Module WebAdministration -ErrorAction Stop
 
-# --- 8. Create or update site/app and point to new folder ---
+# --- 8. Create or update site: switch physical path to new folder (atomic; no file locks) ---
 $sitePath = "IIS:\Sites\$SiteName"
 if (-not (Test-Path $sitePath)) {
     Write-Step "Creating site ${SiteName} on port $SitePort ..."
     New-Website -Name $SiteName -PhysicalPath $PublishDir -Port $SitePort -ApplicationPool $AppPoolName
 } else {
-    Write-Step "Updating site ${SiteName} physical path to $PublishDir ..."
+    Write-Step "Switching site ${SiteName} physical path to $PublishDir (atomic) ..."
     Set-ItemProperty -Path $sitePath -Name physicalPath -Value $PublishDir
 }
 # Ensure app pool exists and is assigned
@@ -232,7 +302,7 @@ if (-not (Test-Path $poolPath)) {
     New-WebAppPool -Name $AppPoolName
 }
 Set-ItemProperty -Path $sitePath -Name applicationPool -Value $AppPoolName -ErrorAction SilentlyContinue
-Write-Step "IIS site/app pointed to $PublishDir."
+Write-Step "IIS site physical path set to $PublishDir."
 
 # --- 9. Restart AppPool ---
 Write-Step "Recycling application pool ${AppPoolName} ..."
@@ -242,23 +312,70 @@ Restart-WebAppPool -Name $AppPoolName
 Write-Step "Restarting IIS ..."
 iisreset
 
-# --- 11. Smoke test ---
+# --- 11. Preflight / Verification: GET /api/health and assert provider when SqlServer ---
 Write-Step "Waiting 5s for app to start..."
 Start-Sleep -Seconds 5
-Write-Step "Smoke test: GET $HealthUrl ..."
+Write-Step "Preflight: GET $HealthUrl ..."
+$healthPass = $false
+$providerPass = $true
 try {
     $response = Invoke-WebRequest -Uri $HealthUrl -UseBasicParsing -TimeoutSec 15
     if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 300) {
-        Write-Host "Smoke test PASSED (HTTP $($response.StatusCode))." -ForegroundColor Green
-    } else {
-        Write-Host "Smoke test WARNING: HTTP $($response.StatusCode)." -ForegroundColor Yellow
+        $healthPass = $true
+        $json = $response.Content | ConvertFrom-Json
+        if ($databaseProvider -eq "SqlServer") {
+            $reportedProvider = $json.database.provider
+            if ($reportedProvider -eq "SqlServer") {
+                Write-Host "  Provider check: reported provider is SqlServer." -ForegroundColor Green
+            } else {
+                $providerPass = $false
+                Write-Host "  Provider check: expected SqlServer but /api/health reported: $reportedProvider" -ForegroundColor Red
+            }
+        }
     }
 } catch {
-    Write-Host "Smoke test FAILED: $_" -ForegroundColor Red
-    throw "Smoke test failed: $_"
+    Write-Host "  Request failed: $_" -ForegroundColor Red
 }
 
-# --- 12. Show latest stdout log (first 200 lines) ---
+if (-not ($healthPass -and $providerPass)) {
+    # When SqlServer and health failed, check stdout log for SQL login error 18456
+    $logsDir = Join-Path $PublishDir "logs"
+    $latestLog = Get-ChildItem -Path $logsDir -Filter "stdout*.log" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if (-not $latestLog) { $latestLog = Get-ChildItem -Path $logsDir -Filter "*.log" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1 }
+    $logContent = ""
+    if ($latestLog) { $logContent = Get-Content $latestLog.FullName -Raw -ErrorAction SilentlyContinue }
+    $is18456 = $databaseProvider -eq "SqlServer" -and $logContent -and ($logContent -match "18456" -or $logContent -match "Login failed for user 'IIS APPPOOL")
+    if ($is18456) {
+        Write-Host ""
+        Write-Host "SQL login missing for IIS APPPOOL\$AppPoolName. Run the provided SQL script." -ForegroundColor Red
+        Write-Host "  1. Open tools\_handoff_tests\sqlserver-permissions.sql in SSMS and execute (or run sqlserver-permissions.ps1 -DatabaseName TikQ -AppPoolName $AppPoolName and execute the output)." -ForegroundColor Yellow
+        Write-Host "  2. Recycle the Application Pool: Restart-WebAppPool -Name $AppPoolName" -ForegroundColor Yellow
+        Write-Host "  3. See docs/01_Runbook/IIS_SQLSERVER_PERMISSIONS.md and docs/01_Runbook/DEPLOYMENT_REQUIRED_CONFIG.md (SQL Server permissions section)." -ForegroundColor Yellow
+        Write-Host "  Stdout log: $($latestLog.FullName)" -ForegroundColor Gray
+        Write-Host ""
+    }
+}
+
+if ($healthPass -and $providerPass) {
+    Write-Host "Verification: PASS (health OK" + $(if ($databaseProvider -eq "SqlServer") { ", provider SqlServer" } else { "" }) + ")." -ForegroundColor Green
+} else {
+    Write-Host "Verification: FAIL (health=$healthPass, providerCheck=$providerPass)." -ForegroundColor Red
+    throw "Verification failed: health=$healthPass, providerCheck=$providerPass."
+}
+
+# --- 12. Optional cleanup: keep last N versioned folders, remove older ones ---
+if ($KeepLastNFolders -gt 0) {
+    Write-Step "Cleanup: keeping last $KeepLastNFolders tikq-backend-* folders in $PublishRoot ..."
+    $versionedFolders = Get-ChildItem -Path $PublishRoot -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^tikq-backend-\d{8}-\d{6}$' } | Sort-Object Name -Descending
+    $toRemove = $versionedFolders | Select-Object -Skip $KeepLastNFolders
+    foreach ($dir in $toRemove) {
+        Write-Step "Removing old folder: $($dir.FullName)"
+        Remove-Item -Path $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if ($toRemove.Count -gt 0) { Write-Step "Removed $($toRemove.Count) old folder(s)." } else { Write-Step "No old folders to remove." }
+}
+
+# --- 13. Show latest stdout log (first 200 lines); logs folder is where the app writes stdout ---
 $logsDir = Join-Path $PublishDir "logs"
 $latestLog = Get-ChildItem -Path $logsDir -Filter "stdout*.log" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (-not $latestLog) { $latestLog = Get-ChildItem -Path $logsDir -Filter "*.log" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1 }
@@ -271,3 +388,11 @@ if ($latestLog) {
 
 Write-Host ""
 Write-Step "Deploy completed. Publish folder: $PublishDir"
+
+
+
+
+
+
+
+

@@ -1023,7 +1023,7 @@ public class TicketService : ITicketService
                 var resolvedFields = new List<(TicketDynamicFieldRequest FieldValue, SubcategoryFieldDefinition FieldDefinition)>();
                 var fieldDefinitionsById = fieldDefinitions.ToDictionary(f => f.Id);
                 var fieldDefinitionsByKey = fieldDefinitions
-                    .GroupBy(f => f.Key, StringComparer.OrdinalIgnoreCase)
+                    .GroupBy(f => f.FieldKey, StringComparer.OrdinalIgnoreCase)
                     .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
                 foreach (var fieldValue in submittedFields)
@@ -1202,7 +1202,7 @@ public class TicketService : ITicketService
 
             var fieldDefinitionsById = fieldDefinitions.ToDictionary(f => f.Id);
             var fieldDefinitionsByKey = fieldDefinitions
-                .GroupBy(f => f.Key, StringComparer.OrdinalIgnoreCase)
+                .GroupBy(f => f.FieldKey, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
             foreach (var fieldValue in request.DynamicFields)
@@ -2047,7 +2047,7 @@ public class TicketService : ITicketService
                 .Select(fv => new DTOs.TicketDynamicFieldResponse
                 {
                     FieldDefinitionId = fv.FieldDefinitionId,
-                    Key = fv.FieldDefinition?.Key ?? string.Empty,
+                    Key = fv.FieldDefinition?.FieldKey ?? string.Empty,
                     Label = fv.FieldDefinition?.Label ?? string.Empty,
                     Type = fv.FieldDefinition?.Type.ToString() ?? string.Empty,
                     Value = fv.Value ?? string.Empty,

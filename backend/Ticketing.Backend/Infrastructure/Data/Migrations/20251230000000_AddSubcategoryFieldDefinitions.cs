@@ -1,10 +1,14 @@
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Ticketing.Backend.Infrastructure.Data;
 
 #nullable disable
 
 namespace Ticketing.Backend.Infrastructure.Data.Migrations;
 
 /// <inheritdoc />
+[DbContext(typeof(AppDbContext))]
+[Migration("20251230000000_AddSubcategoryFieldDefinitions")]
 public partial class AddSubcategoryFieldDefinitions : Migration
 {
     /// <inheritdoc />
@@ -14,18 +18,18 @@ public partial class AddSubcategoryFieldDefinitions : Migration
             name: "SubcategoryFieldDefinitions",
             columns: table => new
             {
-                Id = table.Column<int>(type: "INTEGER", nullable: false)
+                Id = table.Column<int>(nullable: false)
                     .Annotation("Sqlite:Autoincrement", true),
-                SubcategoryId = table.Column<int>(type: "INTEGER", nullable: false),
-                Name = table.Column<string>(type: "TEXT", maxLength: 200, nullable: false),
-                Label = table.Column<string>(type: "TEXT", maxLength: 200, nullable: false),
-                Key = table.Column<string>(type: "TEXT", maxLength: 100, nullable: false),
-                Type = table.Column<string>(type: "TEXT", nullable: false),
-                IsRequired = table.Column<bool>(type: "INTEGER", nullable: false, defaultValue: false),
-                DefaultValue = table.Column<string>(type: "TEXT", maxLength: 500, nullable: true),
-                OptionsJson = table.Column<string>(type: "TEXT", nullable: true),
-                Min = table.Column<double>(type: "REAL", nullable: true),
-                Max = table.Column<double>(type: "REAL", nullable: true)
+                SubcategoryId = table.Column<int>(nullable: false),
+                Name = table.Column<string>(maxLength: 200, nullable: false),
+                Label = table.Column<string>(maxLength: 200, nullable: false),
+                Key = table.Column<string>(maxLength: 100, nullable: false),
+                Type = table.Column<string>(nullable: false),
+                IsRequired = table.Column<bool>(nullable: false, defaultValue: false),
+                DefaultValue = table.Column<string>(maxLength: 500, nullable: true),
+                OptionsJson = table.Column<string>(nullable: true),
+                Min = table.Column<double>(nullable: true),
+                Max = table.Column<double>(nullable: true)
             },
             constraints: table =>
             {

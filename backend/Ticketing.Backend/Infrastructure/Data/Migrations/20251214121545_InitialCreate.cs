@@ -1,10 +1,22 @@
-﻿using System;
+using System;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Metadata;
+using Ticketing.Backend.Infrastructure.Data;
 
 #nullable disable
 
+// Smoke test (SQL Server): From repo root run:
+//   .\tools\sql\reset-tikq-db.ps1 -Server "." -Force
+//   cd backend\Ticketing.Backend
+//   $env:Database__Provider="SqlServer"
+//   $env:ConnectionStrings__DefaultConnection="Server=.;Database=TikQ;Trusted_Connection=True;TrustServerCertificate=True;"
+//   dotnet run
+// Expected: migrations apply, seed completes, app starts (no duplicate attributes, no cascade-path errors, no invalid column).
+
 namespace Ticketing.Backend.Infrastructure.Data.Migrations
 {
+    // Discovery attributes added for SQL Server EF migration discovery.
     /// <inheritdoc />
     public partial class InitialCreate : Migration
     {
@@ -15,12 +27,13 @@ namespace Ticketing.Backend.Infrastructure.Data.Migrations
                 name: "Categories",
                 columns: table => new
                 {
-                    Id = table.Column<int>(type: "INTEGER", nullable: false)
-                        .Annotation("Sqlite:Autoincrement", true),
-                    Name = table.Column<string>(type: "TEXT", maxLength: 200, nullable: false),
-                    Description = table.Column<string>(type: "TEXT", nullable: true),
-                    IsActive = table.Column<bool>(type: "INTEGER", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false)
+                    Id = table.Column<int>(nullable: false)
+                        .Annotation("Sqlite:Autoincrement", true)
+                        .Annotation("SqlServer:ValueGenerationStrategy", SqlServerValueGenerationStrategy.IdentityColumn),
+                    Name = table.Column<string>(maxLength: 200, nullable: false),
+                    Description = table.Column<string>(nullable: true),
+                    IsActive = table.Column<bool>(nullable: false),
+                    CreatedAt = table.Column<DateTime>(nullable: false)
                 },
                 constraints: table =>
                 {
@@ -31,32 +44,32 @@ namespace Ticketing.Backend.Infrastructure.Data.Migrations
                 name: "SystemSettings",
                 columns: table => new
                 {
-                    Id = table.Column<int>(type: "INTEGER", nullable: false)
+                    Id = table.Column<int>(nullable: false)
                         .Annotation("Sqlite:Autoincrement", true),
-                    AppName = table.Column<string>(type: "TEXT", nullable: false),
-                    SupportEmail = table.Column<string>(type: "TEXT", nullable: false),
-                    SupportPhone = table.Column<string>(type: "TEXT", nullable: false),
-                    DefaultLanguage = table.Column<string>(type: "TEXT", nullable: false),
-                    DefaultTheme = table.Column<string>(type: "TEXT", nullable: false),
-                    Timezone = table.Column<string>(type: "TEXT", nullable: false),
-                    DefaultPriority = table.Column<int>(type: "INTEGER", nullable: false),
-                    DefaultStatus = table.Column<int>(type: "INTEGER", nullable: false),
-                    ResponseSlaHours = table.Column<int>(type: "INTEGER", nullable: false),
-                    AutoAssignEnabled = table.Column<bool>(type: "INTEGER", nullable: false),
-                    AllowClientAttachments = table.Column<bool>(type: "INTEGER", nullable: false),
-                    MaxAttachmentSizeMB = table.Column<int>(type: "INTEGER", nullable: false),
-                    EmailNotificationsEnabled = table.Column<bool>(type: "INTEGER", nullable: false),
-                    SmsNotificationsEnabled = table.Column<bool>(type: "INTEGER", nullable: false),
-                    NotifyOnTicketCreated = table.Column<bool>(type: "INTEGER", nullable: false),
-                    NotifyOnTicketAssigned = table.Column<bool>(type: "INTEGER", nullable: false),
-                    NotifyOnTicketReplied = table.Column<bool>(type: "INTEGER", nullable: false),
-                    NotifyOnTicketClosed = table.Column<bool>(type: "INTEGER", nullable: false),
-                    PasswordMinLength = table.Column<int>(type: "INTEGER", nullable: false),
-                    Require2FA = table.Column<bool>(type: "INTEGER", nullable: false),
-                    SessionTimeoutMinutes = table.Column<int>(type: "INTEGER", nullable: false),
-                    AllowedEmailDomains = table.Column<string>(type: "TEXT", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "TEXT", nullable: false)
+                    AppName = table.Column<string>(nullable: false),
+                    SupportEmail = table.Column<string>(nullable: false),
+                    SupportPhone = table.Column<string>(nullable: false),
+                    DefaultLanguage = table.Column<string>(nullable: false),
+                    DefaultTheme = table.Column<string>(nullable: false),
+                    Timezone = table.Column<string>(nullable: false),
+                    DefaultPriority = table.Column<int>(nullable: false),
+                    DefaultStatus = table.Column<int>(nullable: false),
+                    ResponseSlaHours = table.Column<int>(nullable: false),
+                    AutoAssignEnabled = table.Column<bool>(nullable: false),
+                    AllowClientAttachments = table.Column<bool>(nullable: false),
+                    MaxAttachmentSizeMB = table.Column<int>(nullable: false),
+                    EmailNotificationsEnabled = table.Column<bool>(nullable: false),
+                    SmsNotificationsEnabled = table.Column<bool>(nullable: false),
+                    NotifyOnTicketCreated = table.Column<bool>(nullable: false),
+                    NotifyOnTicketAssigned = table.Column<bool>(nullable: false),
+                    NotifyOnTicketReplied = table.Column<bool>(nullable: false),
+                    NotifyOnTicketClosed = table.Column<bool>(nullable: false),
+                    PasswordMinLength = table.Column<int>(nullable: false),
+                    Require2FA = table.Column<bool>(nullable: false),
+                    SessionTimeoutMinutes = table.Column<int>(nullable: false),
+                    AllowedEmailDomains = table.Column<string>(nullable: false),
+                    CreatedAt = table.Column<DateTime>(nullable: false),
+                    UpdatedAt = table.Column<DateTime>(nullable: false)
                 },
                 constraints: table =>
                 {
@@ -67,15 +80,15 @@ namespace Ticketing.Backend.Infrastructure.Data.Migrations
                 name: "Users",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    FullName = table.Column<string>(type: "TEXT", maxLength: 200, nullable: false),
-                    Email = table.Column<string>(type: "TEXT", maxLength: 200, nullable: false),
-                    PasswordHash = table.Column<string>(type: "TEXT", nullable: false),
-                    Role = table.Column<int>(type: "INTEGER", nullable: false),
-                    PhoneNumber = table.Column<string>(type: "TEXT", maxLength: 50, nullable: true),
-                    Department = table.Column<string>(type: "TEXT", maxLength: 200, nullable: true),
-                    AvatarUrl = table.Column<string>(type: "TEXT", maxLength: 8192, nullable: true),
-                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false)
+                    Id = table.Column<Guid>(nullable: false),
+                    FullName = table.Column<string>(maxLength: 200, nullable: false),
+                    Email = table.Column<string>(maxLength: 200, nullable: false),
+                    PasswordHash = table.Column<string>(nullable: false),
+                    Role = table.Column<int>(nullable: false),
+                    PhoneNumber = table.Column<string>(maxLength: 50, nullable: true),
+                    Department = table.Column<string>(maxLength: 200, nullable: true),
+                    AvatarUrl = table.Column<string>(maxLength: 8192, nullable: true),
+                    CreatedAt = table.Column<DateTime>(nullable: false)
                 },
                 constraints: table =>
                 {
@@ -86,13 +99,13 @@ namespace Ticketing.Backend.Infrastructure.Data.Migrations
                 name: "Subcategories",
                 columns: table => new
                 {
-                    Id = table.Column<int>(type: "INTEGER", nullable: false)
+                    Id = table.Column<int>(nullable: false)
                         .Annotation("Sqlite:Autoincrement", true),
-                    CategoryId = table.Column<int>(type: "INTEGER", nullable: false),
-                    Name = table.Column<string>(type: "TEXT", maxLength: 200, nullable: false),
-                    Description = table.Column<string>(type: "TEXT", nullable: true),
-                    IsActive = table.Column<bool>(type: "INTEGER", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false)
+                    CategoryId = table.Column<int>(nullable: false),
+                    Name = table.Column<string>(maxLength: 200, nullable: false),
+                    Description = table.Column<string>(nullable: true),
+                    IsActive = table.Column<bool>(nullable: false),
+                    CreatedAt = table.Column<DateTime>(nullable: false)
                 },
                 constraints: table =>
                 {
@@ -109,11 +122,11 @@ namespace Ticketing.Backend.Infrastructure.Data.Migrations
                 name: "Notifications",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    UserId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    Message = table.Column<string>(type: "TEXT", nullable: false),
-                    IsRead = table.Column<bool>(type: "INTEGER", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false)
+                    Id = table.Column<Guid>(nullable: false),
+                    UserId = table.Column<Guid>(nullable: false),
+                    Message = table.Column<string>(nullable: false),
+                    IsRead = table.Column<bool>(nullable: false),
+                    CreatedAt = table.Column<DateTime>(nullable: false)
                 },
                 constraints: table =>
                 {
@@ -130,14 +143,14 @@ namespace Ticketing.Backend.Infrastructure.Data.Migrations
                 name: "Technicians",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    FullName = table.Column<string>(type: "TEXT", maxLength: 200, nullable: false),
-                    Email = table.Column<string>(type: "TEXT", maxLength: 200, nullable: false),
-                    Phone = table.Column<string>(type: "TEXT", maxLength: 20, nullable: true),
-                    Department = table.Column<string>(type: "TEXT", maxLength: 100, nullable: true),
-                    IsActive = table.Column<bool>(type: "INTEGER", nullable: false, defaultValue: true),
-                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    UserId = table.Column<Guid>(type: "TEXT", nullable: true)
+                    Id = table.Column<Guid>(nullable: false),
+                    FullName = table.Column<string>(maxLength: 200, nullable: false),
+                    Email = table.Column<string>(maxLength: 200, nullable: false),
+                    Phone = table.Column<string>(maxLength: 20, nullable: true),
+                    Department = table.Column<string>(maxLength: 100, nullable: true),
+                    IsActive = table.Column<bool>(nullable: false, defaultValue: true),
+                    CreatedAt = table.Column<DateTime>(nullable: false),
+                    UserId = table.Column<Guid>(nullable: true)
                 },
                 constraints: table =>
                 {
@@ -154,18 +167,18 @@ namespace Ticketing.Backend.Infrastructure.Data.Migrations
                 name: "UserPreferences",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    UserId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    Theme = table.Column<string>(type: "TEXT", maxLength: 20, nullable: false),
-                    FontSize = table.Column<string>(type: "TEXT", maxLength: 10, nullable: false),
-                    Language = table.Column<string>(type: "TEXT", maxLength: 10, nullable: false),
-                    Timezone = table.Column<string>(type: "TEXT", maxLength: 100, nullable: false),
-                    EmailEnabled = table.Column<bool>(type: "INTEGER", nullable: false),
-                    PushEnabled = table.Column<bool>(type: "INTEGER", nullable: false),
-                    SmsEnabled = table.Column<bool>(type: "INTEGER", nullable: false),
-                    DesktopEnabled = table.Column<bool>(type: "INTEGER", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "TEXT", nullable: false)
+                    Id = table.Column<Guid>(nullable: false),
+                    UserId = table.Column<Guid>(nullable: false),
+                    Theme = table.Column<string>(maxLength: 20, nullable: false),
+                    FontSize = table.Column<string>(maxLength: 10, nullable: false),
+                    Language = table.Column<string>(maxLength: 10, nullable: false),
+                    Timezone = table.Column<string>(maxLength: 100, nullable: false),
+                    EmailEnabled = table.Column<bool>(nullable: false),
+                    PushEnabled = table.Column<bool>(nullable: false),
+                    SmsEnabled = table.Column<bool>(nullable: false),
+                    DesktopEnabled = table.Column<bool>(nullable: false),
+                    CreatedAt = table.Column<DateTime>(nullable: false),
+                    UpdatedAt = table.Column<DateTime>(nullable: false)
                 },
                 constraints: table =>
                 {
@@ -182,19 +195,19 @@ namespace Ticketing.Backend.Infrastructure.Data.Migrations
                 name: "Tickets",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    Title = table.Column<string>(type: "TEXT", maxLength: 300, nullable: false),
-                    Description = table.Column<string>(type: "TEXT", nullable: false),
-                    CategoryId = table.Column<int>(type: "INTEGER", nullable: false),
-                    SubcategoryId = table.Column<int>(type: "INTEGER", nullable: true),
-                    Priority = table.Column<int>(type: "INTEGER", nullable: false),
-                    Status = table.Column<int>(type: "INTEGER", nullable: false),
-                    CreatedByUserId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    AssignedToUserId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    TechnicianId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "TEXT", nullable: true),
-                    DueDate = table.Column<DateTime>(type: "TEXT", nullable: true)
+                    Id = table.Column<Guid>(nullable: false),
+                    Title = table.Column<string>(maxLength: 300, nullable: false),
+                    Description = table.Column<string>(nullable: false),
+                    CategoryId = table.Column<int>(nullable: false),
+                    SubcategoryId = table.Column<int>(nullable: true),
+                    Priority = table.Column<int>(nullable: false),
+                    Status = table.Column<int>(nullable: false),
+                    CreatedByUserId = table.Column<Guid>(nullable: false),
+                    AssignedToUserId = table.Column<Guid>(nullable: true),
+                    TechnicianId = table.Column<Guid>(nullable: true),
+                    CreatedAt = table.Column<DateTime>(nullable: false),
+                    UpdatedAt = table.Column<DateTime>(nullable: true),
+                    DueDate = table.Column<DateTime>(nullable: true)
                 },
                 constraints: table =>
                 {
@@ -235,10 +248,10 @@ namespace Ticketing.Backend.Infrastructure.Data.Migrations
                 name: "Attachments",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    TicketId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    FileName = table.Column<string>(type: "TEXT", nullable: false),
-                    FileUrl = table.Column<string>(type: "TEXT", nullable: false)
+                    Id = table.Column<Guid>(nullable: false),
+                    TicketId = table.Column<Guid>(nullable: false),
+                    FileName = table.Column<string>(nullable: false),
+                    FileUrl = table.Column<string>(nullable: false)
                 },
                 constraints: table =>
                 {
@@ -255,12 +268,12 @@ namespace Ticketing.Backend.Infrastructure.Data.Migrations
                 name: "TicketMessages",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    TicketId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    AuthorUserId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    Message = table.Column<string>(type: "TEXT", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    Status = table.Column<int>(type: "INTEGER", nullable: true)
+                    Id = table.Column<Guid>(nullable: false),
+                    TicketId = table.Column<Guid>(nullable: false),
+                    AuthorUserId = table.Column<Guid>(nullable: false),
+                    Message = table.Column<string>(nullable: false),
+                    CreatedAt = table.Column<DateTime>(nullable: false),
+                    Status = table.Column<int>(nullable: true)
                 },
                 constraints: table =>
                 {

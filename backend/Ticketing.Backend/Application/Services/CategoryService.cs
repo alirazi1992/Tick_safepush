@@ -245,7 +245,7 @@ public class CategoryService : ICategoryService
                 SubcategoryId = subcategory.Id,
                 Name = template.Name,
                 Label = template.Label,
-                Key = template.Key,
+                FieldKey = template.Key,
                 Type = template.Type,
                 IsRequired = template.IsRequired,
                 DefaultValue = template.DefaultValue,

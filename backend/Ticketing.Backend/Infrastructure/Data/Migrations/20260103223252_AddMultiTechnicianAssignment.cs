@@ -1,11 +1,16 @@
 using System;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Ticketing.Backend.Infrastructure.Data;
 
 #nullable disable
 
 namespace Ticketing.Backend.Infrastructure.Data.Migrations
 {
+    // Discovery attributes added for SQL Server EF migration discovery. (No Designer.cs; attributes here for discovery.)
     /// <inheritdoc />
+    [DbContext(typeof(AppDbContext))]
+    [Migration("20260103223252_AddMultiTechnicianAssignment")]
     public partial class AddMultiTechnicianAssignment : Migration
     {
         /// <inheritdoc />
@@ -15,15 +20,15 @@ namespace Ticketing.Backend.Infrastructure.Data.Migrations
                 name: "TicketTechnicianAssignments",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    TicketId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    TechnicianUserId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    TechnicianId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    AssignedAt = table.Column<DateTime>(type: "TEXT", nullable: false),
-                    AssignedByUserId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    IsActive = table.Column<bool>(type: "INTEGER", nullable: false, defaultValue: true),
-                    Role = table.Column<string>(type: "TEXT", maxLength: 50, nullable: true),
-                    UpdatedAt = table.Column<DateTime>(type: "TEXT", nullable: true)
+                    Id = table.Column<Guid>(nullable: false),
+                    TicketId = table.Column<Guid>(nullable: false),
+                    TechnicianUserId = table.Column<Guid>(nullable: false),
+                    TechnicianId = table.Column<Guid>(nullable: true),
+                    AssignedAt = table.Column<DateTime>(nullable: false),
+                    AssignedByUserId = table.Column<Guid>(nullable: false),
+                    IsActive = table.Column<bool>(nullable: false, defaultValue: true),
+                    Role = table.Column<string>(maxLength: 50, nullable: true),
+                    UpdatedAt = table.Column<DateTime>(nullable: true)
                 },
                 constraints: table =>
                 {
@@ -58,15 +63,15 @@ namespace Ticketing.Backend.Infrastructure.Data.Migrations
                 name: "TicketActivityEvents",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    TicketId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    ActorUserId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    ActorRole = table.Column<string>(type: "TEXT", maxLength: 50, nullable: false),
-                    EventType = table.Column<string>(type: "TEXT", maxLength: 100, nullable: false),
-                    OldStatus = table.Column<string>(type: "TEXT", maxLength: 50, nullable: true),
-                    NewStatus = table.Column<string>(type: "TEXT", maxLength: 50, nullable: true),
-                    MetadataJson = table.Column<string>(type: "TEXT", maxLength: 2000, nullable: true),
-                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false)
+                    Id = table.Column<Guid>(nullable: false),
+                    TicketId = table.Column<Guid>(nullable: false),
+                    ActorUserId = table.Column<Guid>(nullable: false),
+                    ActorRole = table.Column<string>(maxLength: 50, nullable: false),
+                    EventType = table.Column<string>(maxLength: 100, nullable: false),
+                    OldStatus = table.Column<string>(maxLength: 50, nullable: true),
+                    NewStatus = table.Column<string>(maxLength: 50, nullable: true),
+                    MetadataJson = table.Column<string>(maxLength: 2000, nullable: true),
+                    CreatedAt = table.Column<DateTime>(nullable: false)
                 },
                 constraints: table =>
                 {

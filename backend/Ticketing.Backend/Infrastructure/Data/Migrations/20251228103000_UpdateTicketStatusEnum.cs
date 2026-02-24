@@ -1,10 +1,14 @@
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Ticketing.Backend.Infrastructure.Data;
 
 #nullable disable
 
 namespace Ticketing.Backend.Infrastructure.Data.Migrations
 {
-    /// <inheritdoc />
+    // Discovery attributes added for SQL Server EF migration discovery. (No Designer.cs; attributes here for discovery.)
+    [DbContext(typeof(AppDbContext))]
+    [Migration("20251228103000_UpdateTicketStatusEnum")]
     public partial class UpdateTicketStatusEnum : Migration
     {
         /// <inheritdoc />

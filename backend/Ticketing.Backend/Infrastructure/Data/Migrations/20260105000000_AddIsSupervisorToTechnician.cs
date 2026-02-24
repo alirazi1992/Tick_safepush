@@ -1,10 +1,13 @@
 using System;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Ticketing.Backend.Infrastructure.Data;
 
 #nullable disable
 
 namespace Ticketing.Backend.Infrastructure.Data.Migrations
 {
+    // Discovery attributes added for SQL Server EF migration discovery.
     /// <inheritdoc />
     public partial class AddIsSupervisorToTechnician : Migration
     {
@@ -14,7 +17,6 @@ namespace Ticketing.Backend.Infrastructure.Data.Migrations
             migrationBuilder.AddColumn<bool>(
                 name: "IsSupervisor",
                 table: "Technicians",
-                type: "INTEGER",
                 nullable: false,
                 defaultValue: false);
         }

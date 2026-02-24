@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Data.SqlClient;
+using Microsoft.Data.Sqlite;
 using Ticketing.Backend.Application.Repositories;
 using Ticketing.Backend.Domain.Entities;
 using Ticketing.Backend.Infrastructure.Data;
@@ -24,20 +26,58 @@ public class FieldDefinitionRepository : IFieldDefinitionRepository
 
     public async Task<IEnumerable<SubcategoryFieldDefinition>> GetBySubcategoryIdAsync(int subcategoryId, bool includeInactive = true)
     {
-        // Use raw SQL to avoid EF Core foreign key validation issues
         var sql = @"
-            SELECT Id, SubcategoryId, Name, Label, Key, Type, IsRequired,
+            SELECT Id, SubcategoryId, Name, Label, FieldKey, Type, IsRequired,
                    DefaultValue, OptionsJson, Min, Max, SortOrder, IsActive, CreatedAt, UpdatedAt
             FROM SubcategoryFieldDefinitions
             WHERE SubcategoryId = {0}
             " + (includeInactive ? "" : " AND IsActive = 1 ") + @"
             ORDER BY SortOrder, Id
         ";
+        try
+        {
+            return await _context.SubcategoryFieldDefinitions
+                .FromSqlRaw(sql, subcategoryId)
+                .AsNoTracking()
+                .ToListAsync();
+        }
+        catch (Exception ex) when (IsMissingColumnException(ex))
+        {
+            // Backward compatibility: DB still has [Key] column (migration not applied). Use legacy column, alias as FieldKey.
+            var provider = _context.Database.ProviderName ?? "";
+            string legacySql;
+            if (provider.Contains("SqlServer", StringComparison.OrdinalIgnoreCase))
+                legacySql = @"
+            SELECT Id, SubcategoryId, Name, Label, [Key] AS FieldKey, Type, IsRequired,
+                   DefaultValue, OptionsJson, Min, Max, SortOrder, IsActive, CreatedAt, UpdatedAt
+            FROM SubcategoryFieldDefinitions
+            WHERE SubcategoryId = {0}
+            " + (includeInactive ? "" : " AND IsActive = 1 ") + @"
+            ORDER BY SortOrder, Id";
+            else
+                legacySql = @"
+            SELECT Id, SubcategoryId, Name, Label, ""Key"" AS FieldKey, Type, IsRequired,
+                   DefaultValue, OptionsJson, Min, Max, SortOrder, IsActive, CreatedAt, UpdatedAt
+            FROM SubcategoryFieldDefinitions
+            WHERE SubcategoryId = {0}
+            " + (includeInactive ? "" : " AND IsActive = 1 ") + @"
+            ORDER BY SortOrder, Id";
+            return await _context.SubcategoryFieldDefinitions
+                .FromSqlRaw(legacySql, subcategoryId)
+                .AsNoTracking()
+                .ToListAsync();
+        }
+    }
 
-        return await _context.SubcategoryFieldDefinitions
-            .FromSqlRaw(sql, subcategoryId)
-            .AsNoTracking()
-            .ToListAsync();
+    private static bool IsMissingColumnException(Exception ex)
+    {
+        if (ex is SqlException sqlEx)
+            return sqlEx.Message.Contains("Invalid column name 'FieldKey'", StringComparison.OrdinalIgnoreCase) ||
+                   sqlEx.Message.Contains("Invalid column name 'Key'", StringComparison.OrdinalIgnoreCase);
+        if (ex is SqliteException sqliteEx)
+            return sqliteEx.Message.Contains("no such column", StringComparison.OrdinalIgnoreCase) &&
+                   (sqliteEx.Message.Contains("FieldKey", StringComparison.OrdinalIgnoreCase) || sqliteEx.Message.Contains("Key", StringComparison.OrdinalIgnoreCase));
+        return false;
     }
 
     public async Task<IEnumerable<SubcategoryFieldDefinition>> GetByCategoryIdAsync(int categoryId, bool includeInactive = true)
@@ -108,7 +148,7 @@ public class FieldDefinitionRepository : IFieldDefinitionRepository
         // Core columns from entity
         var coreColumns = new List<string>
         {
-            "SubcategoryId", "Name", "Label", "Key", "Type", "IsRequired", "DefaultValue", "OptionsJson", "Min", "Max",
+            "SubcategoryId", "Name", "Label", "FieldKey", "Type", "IsRequired", "DefaultValue", "OptionsJson", "Min", "Max",
             "SortOrder", "IsActive", "CreatedAt", "UpdatedAt"
         };
         var coreValues = new List<string>
@@ -116,7 +156,7 @@ public class FieldDefinitionRepository : IFieldDefinitionRepository
             fieldDefinition.SubcategoryId.ToString(),
             EscapeSqlString(fieldDefinition.Name),
             EscapeSqlString(fieldDefinition.Label),
-            EscapeSqlString(fieldDefinition.Key),
+            EscapeSqlString(fieldDefinition.FieldKey),
             $"'{fieldDefinition.Type}'",
             isRequiredInt.ToString(),
             EscapeSqlString(fieldDefinition.DefaultValue),
@@ -198,7 +238,7 @@ public class FieldDefinitionRepository : IFieldDefinitionRepository
     {
         return await _context.SubcategoryFieldDefinitions
             .AsNoTracking()
-            .AnyAsync(f => f.SubcategoryId == subcategoryId && f.Key == key);
+            .AnyAsync(f => f.SubcategoryId == subcategoryId && f.FieldKey == key);
     }
 
     public async Task<bool> ExistsForCategoryAsync(int categoryId, string key)
@@ -206,7 +246,7 @@ public class FieldDefinitionRepository : IFieldDefinitionRepository
         return await _context.SubcategoryFieldDefinitions
             .AsNoTracking()
             .Include(f => f.Subcategory)
-            .AnyAsync(f => f.Subcategory != null && f.Subcategory.CategoryId == categoryId && f.Key == key);
+            .AnyAsync(f => f.Subcategory != null && f.Subcategory.CategoryId == categoryId && f.FieldKey == key);
     }
 }
 

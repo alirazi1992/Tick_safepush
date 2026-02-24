@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Security.Claims;
+using System.Security.Principal;
 using Ticketing.Backend.Domain.Enums;
 using Ticketing.Backend.Api.Serialization;
 using Microsoft.AspNetCore.Authentication;
@@ -14,6 +15,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using Microsoft.Data.SqlClient;
 using Ticketing.Backend.Application.Common;
 using Ticketing.Backend.Application.Services;
 using Ticketing.Backend.Domain.Entities;
@@ -122,6 +124,12 @@ builder.Services.Configure<Ticketing.Backend.Infrastructure.Auth.EmergencyAdminO
     builder.Configuration.GetSection(Ticketing.Backend.Infrastructure.Auth.EmergencyAdminOptions.SectionName));
 
 // =======================
+// Auth cookies (SameSite, Secure) for IIS/reverse proxy
+// =======================
+builder.Services.Configure<Ticketing.Backend.Infrastructure.Auth.AuthCookiesOptions>(
+    builder.Configuration.GetSection(Ticketing.Backend.Infrastructure.Auth.AuthCookiesOptions.SectionName));
+
+// =======================
 // Windows user map (DOMAIN\username -> email; config-only, no LDAP yet)
 // =======================
 var windowsUserMapOptions = new Ticketing.Backend.Infrastructure.Auth.WindowsUserMapOptions();
@@ -145,23 +153,93 @@ else
     builder.Services.AddScoped<Ticketing.Backend.Application.Common.Interfaces.IAdUserLookup, Ticketing.Backend.Infrastructure.Auth.NullAdUserLookup>();
 
 // =======================
-// DbContext (SQLite) - DETERMINISTIC PATH
+// DbContext: strongly-typed DatabaseOptions (Sqlite | SqlServer), fail-fast in Production
 // =======================
-// Resolve SQLite DB path to an absolute path based on ContentRoot
-// This ensures the same DB file is used regardless of working directory
-var sqliteDbPath = ResolveSqliteDbPath(builder.Configuration, builder.Environment.ContentRootPath);
-var sqliteConnectionString = $"Data Source={sqliteDbPath}";
+var databaseOptions = new Ticketing.Backend.Infrastructure.Data.DatabaseOptions();
+builder.Configuration.GetSection(Ticketing.Backend.Infrastructure.Data.DatabaseOptions.SectionName).Bind(databaseOptions);
+var dbSection = builder.Configuration.GetSection(Ticketing.Backend.Infrastructure.Data.DatabaseOptions.SectionName);
+if (!dbSection.GetSection("AutoMigrateOnStartup").Exists())
+    databaseOptions.AutoMigrateOnStartup = builder.Environment.IsDevelopment();
 
-builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlite(sqliteConnectionString));
+var bootstrapOptions = new Ticketing.Backend.Infrastructure.Data.BootstrapOptions();
+builder.Configuration.GetSection(Ticketing.Backend.Infrastructure.Data.BootstrapOptions.SectionName).Bind(bootstrapOptions);
+var bootstrapSection = builder.Configuration.GetSection(Ticketing.Backend.Infrastructure.Data.BootstrapOptions.SectionName);
+if (builder.Environment.IsProduction() && !bootstrapSection.GetSection("Enabled").Exists())
+    bootstrapOptions.Enabled = false;
 
-// SQLite path safety: ensure App_Data exists (ResolveSqliteDbPath already creates it), log absolute path
-var sqliteDir = Path.GetDirectoryName(sqliteDbPath);
-if (!string.IsNullOrEmpty(sqliteDir) && !Directory.Exists(sqliteDir))
+var providerConfigSource = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("Database__Provider"))
+    ? "Environment (Database__Provider)"
+    : "appsettings (Database:Provider)";
+LogStartup($"[STARTUP] Database provider: {databaseOptions.Provider} (source: {providerConfigSource}), AutoMigrateOnStartup: {databaseOptions.AutoMigrateOnStartup}");
+
+// Fail-fast: unknown provider (NormalizedProvider throws)
+try
 {
-    try { Directory.CreateDirectory(sqliteDir); } catch { /* best effort */ }
+    _ = databaseOptions.NormalizedProvider;
 }
-LogStartup($"[STARTUP] Resolved SQLite DB Path (absolute): {Path.GetFullPath(sqliteDbPath)}");
+catch (InvalidOperationException ex)
+{
+    throw new InvalidOperationException(ex.Message);
+}
+
+// Fail-fast: Production requires explicit provider (env Database__Provider) so IIS never accidentally uses default Sqlite
+if (builder.Environment.IsProduction() && string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("Database__Provider")))
+{
+    throw new InvalidOperationException(
+        "Production requires explicit database provider. Set Database__Provider environment variable to 'SqlServer' or 'Sqlite' (e.g. via deploy-iis.ps1 or IIS Application Pool environment variables).");
+}
+
+// Fail-fast: Production + SqlServer + missing/empty connection string
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+if (builder.Environment.IsProduction() && databaseOptions.IsSqlServer && string.IsNullOrWhiteSpace(connectionString))
+{
+    throw new InvalidOperationException(
+        "Production requires a valid database connection. Database:Provider is SqlServer but ConnectionStrings:DefaultConnection is missing or empty. " +
+        "Set ConnectionStrings__DefaultConnection (e.g. via IIS environment variable or appsettings.Production.json) or set Database__Provider=Sqlite to use SQLite.");
+}
+
+var isSqlServer = databaseOptions.IsSqlServer;
+string? sqliteDbPath = null;
+string databasePathOrSummary;
+
+if (isSqlServer)
+{
+    if (string.IsNullOrWhiteSpace(connectionString))
+        throw new InvalidOperationException(
+            "Database:Provider is SqlServer but ConnectionStrings:DefaultConnection is missing or empty. " +
+            "Set ConnectionStrings__DefaultConnection (e.g. via environment variable) or set Provider=Sqlite to use SQLite.");
+    builder.Services.AddDbContext<AppDbContext>(options =>
+        options.UseSqlServer(connectionString, sql =>
+            sql.EnableRetryOnFailure()));
+    try
+    {
+        var csb = new SqlConnectionStringBuilder(connectionString);
+        databasePathOrSummary = $"Server={csb.DataSource};Database={csb.InitialCatalog}";
+    }
+    catch
+    {
+        databasePathOrSummary = "SqlServer (connection string not parsed)";
+    }
+    LogStartup($"[STARTUP] Database provider: SqlServer. Connection summary (no secrets): {databasePathOrSummary}");
+}
+else
+{
+    sqliteDbPath = ResolveSqliteDbPath(builder.Configuration, builder.Environment.ContentRootPath);
+    var sqliteConnectionString = $"Data Source={sqliteDbPath}";
+    builder.Services.AddDbContext<AppDbContext>(options =>
+        options.UseSqlite(sqliteConnectionString));
+    databasePathOrSummary = Path.GetFullPath(sqliteDbPath);
+    var sqliteDir = Path.GetDirectoryName(sqliteDbPath);
+    if (!string.IsNullOrEmpty(sqliteDir) && !Directory.Exists(sqliteDir))
+    {
+        try { Directory.CreateDirectory(sqliteDir); } catch { /* best effort */ }
+    }
+    LogStartup($"[STARTUP] Database provider: Sqlite. Resolved SQLite DB path (absolute): {databasePathOrSummary}");
+}
+
+builder.Services.AddSingleton(databaseOptions);
+builder.Services.AddSingleton(bootstrapOptions);
+builder.Services.AddScoped<Ticketing.Backend.Infrastructure.Data.BootstrapSeederService>();
 
 // =======================
 // DataProtection: persist keys to file system (IIS-safe; avoid EphemeralXmlRepository)
@@ -325,12 +403,12 @@ static async Task EnsureSubcategoryFieldDefinitionsSchemaAsync(
         logger.LogInformation("[SCHEMA_GUARD] Existing columns: {Columns}", string.Join(", ", columns));
 
         // Check for critical required columns and add them additively (NO table recreation)
-        // Critical columns that must exist for the table to function
+        // Critical columns that must exist for the table to function (column name FieldKey for SQL Server reserved keyword compatibility)
         var criticalColumns = new Dictionary<string, string>
         {
             { "Name", "TEXT" },
             { "Label", "TEXT" },
-            { "Key", "TEXT" },
+            { "FieldKey", "TEXT" },
             { "Type", "TEXT" },
             { "IsRequired", "INTEGER" },
             { "SubcategoryId", "INTEGER" }
@@ -367,10 +445,10 @@ static async Task EnsureSubcategoryFieldDefinitionsSchemaAsync(
                     var columnName = missing.Key;
                     
                     // For NOT NULL columns, we need to add as nullable first, then backfill
-                    var isNotNull = columnName == "Name" || columnName == "Label" || columnName == "Key" || 
+                    var isNotNull = columnName == "Name" || columnName == "Label" || columnName == "FieldKey" || 
                                    columnName == "Type" || columnName == "SubcategoryId" || columnName == "IsRequired";
                     
-                    if (isNotNull && (columnName == "Name" || columnName == "Label" || columnName == "Key"))
+                    if (isNotNull && (columnName == "Name" || columnName == "Label" || columnName == "FieldKey"))
                     {
                         // Add as nullable first
                         var addColumnSql = $"ALTER TABLE SubcategoryFieldDefinitions ADD COLUMN {columnName} {columnDef};";
@@ -381,8 +459,8 @@ static async Task EnsureSubcategoryFieldDefinitionsSchemaAsync(
                         }
                         logger.LogInformation("[SCHEMA_GUARD] Added column {Column} as nullable", columnName);
                         
-                        // Backfill: for Name/Label, use Key as default; for Key, use empty string
-                        string backfillValue = columnName == "Key" ? "''" : "Key";
+                        // Backfill: for Name/Label, use FieldKey as default; for FieldKey, use empty string
+                        string backfillValue = columnName == "FieldKey" ? "''" : "FieldKey";
                         var backfillSql = $"UPDATE SubcategoryFieldDefinitions SET {columnName} = {backfillValue} WHERE {columnName} IS NULL;";
                         using (var backfillCommand = connection.CreateCommand())
                         {
@@ -1876,7 +1954,7 @@ builder.Services.AddAuthentication(options =>
             return JwtBearerDefaults.AuthenticationScheme;
         var windowsAuthOpts = context.Request.HttpContext.RequestServices
             .GetService<Microsoft.Extensions.Options.IOptions<Ticketing.Backend.Infrastructure.Auth.WindowsAuthOptions>>();
-        if (windowsAuthOpts?.Value?.Enabled == true)
+        if (windowsAuthOpts?.Value?.IsWindowsAuthAvailable == true)
             return NegotiateDefaults.AuthenticationScheme;
         return JwtBearerDefaults.AuthenticationScheme;
     };
@@ -2009,8 +2087,14 @@ builder.Services.AddControllers().AddJsonOptions(options =>
     options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
     options.JsonSerializerOptions.Converters.Add(new UtcDateTimeJsonConverter());
     options.JsonSerializerOptions.Converters.Add(new NullableUtcDateTimeJsonConverter());
-    options.JsonSerializerOptions.Converters.Add(new UtcDateTimeOffsetJsonConverter());
     options.JsonSerializerOptions.Converters.Add(new NullableUtcDateTimeOffsetJsonConverter());
+    options.JsonSerializerOptions.Converters.Add(new UtcDateTimeOffsetJsonConverter());
+});
+
+// Minimal APIs (e.g. /api/health) use HTTP JSON options; ensure camelCase for consistent responses
+builder.Services.ConfigureHttpJsonOptions(options =>
+{
+    options.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
 });
 
 builder.Services.AddEndpointsApiExplorer();
@@ -2099,7 +2183,7 @@ if (!app.Environment.IsDevelopment())
     app.Logger.LogWarning("[HARDEN] DebugBlocker middleware ENABLED. Env={Env}", app.Environment.EnvironmentName);
 
 // =======================
-// Apply migrations & seed
+// Apply migrations & seed (only when Database:AutoMigrateOnStartup is true; default true in Dev, false in Prod)
 // =======================
 using (var scope = app.Services.CreateScope())
 {
@@ -2108,105 +2192,65 @@ using (var scope = app.Services.CreateScope())
     var passwordHasher = services.GetRequiredService<IPasswordHasher<User>>();
     var logger = services.GetRequiredService<ILogger<Program>>();
     var config = services.GetRequiredService<IConfiguration>();
+    var dbOptions = services.GetRequiredService<Ticketing.Backend.Infrastructure.Data.DatabaseOptions>();
     var enableDevSeeding = config.GetValue<bool>("EnableDevSeeding");
 
-    try
+    if (!dbOptions.AutoMigrateOnStartup)
     {
-        logger.LogInformation("═══════════════════════════════════════════════════════════════");
-        logger.LogInformation("[MIGRATION] Starting database migration...");
-        logger.LogInformation("[MIGRATION] Database path: {DbPath}", sqliteDbPath);
-        logger.LogInformation("[MIGRATION] Database file exists: {Exists}", File.Exists(sqliteDbPath));
-        logger.LogInformation("[MIGRATION] Content root: {ContentRoot}", app.Environment.ContentRootPath);
-        logger.LogInformation("[MIGRATION] Current directory: {CurrentDir}", Directory.GetCurrentDirectory());
-        
-        var pendingMigrations = await context.Database.GetPendingMigrationsAsync();
-        var appliedMigrations = await context.Database.GetAppliedMigrationsAsync();
-        
-        logger.LogInformation("[MIGRATION] Applied migrations: {Applied}", string.Join(", ", appliedMigrations));
-        logger.LogInformation("[MIGRATION] Pending migrations: {Pending}", string.Join(", ", pendingMigrations));
-        
-        await context.Database.MigrateAsync();
-        logger.LogInformation("[MIGRATION] MigrateAsync completed; all pending migrations have been applied.");
+        LogStartup("[STARTUP] Migrations skipped (Database:AutoMigrateOnStartup is false).");
+    }
 
-        var appliedAfter = await context.Database.GetAppliedMigrationsAsync();
-        logger.LogInformation("[MIGRATION] Migrations after apply: {Applied}", string.Join(", ", appliedAfter));
-        logger.LogInformation("[MIGRATION] Database migration completed successfully");
-        
-        // Post-migration schema guard: Verify SubcategoryFieldDefinitions table schema
-        // This handles cases where migrations didn't apply correctly or schema drift occurred
+    await StartupMigrationRunner.RunAsync(
+        context,
+        dbOptions,
+        logger,
+        app.Environment,
+        databasePathOrSummary,
+        sqliteFileExists: isSqlServer ? null : (bool?)(sqliteDbPath != null && File.Exists(sqliteDbPath)));
+
+    if (dbOptions.AutoMigrateOnStartup)
+    {
+        // Lightweight schema diagnostic: SubcategoryFieldDefinitions Key vs FieldKey (SQL Server + SQLite)
+        try
+        {
+            var keyColumn = await SchemaInspector.GetSubcategoryFieldDefinitionKeyColumnNameAsync(context);
+            if (keyColumn != null)
+                logger.LogInformation("[SCHEMA] SubcategoryFieldDefinitions key column: {Column} (prefer FieldKey for SQL Server)", keyColumn);
+            else
+                logger.LogInformation("[SCHEMA] SubcategoryFieldDefinitions key column: could not determine (table may not exist yet)");
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "[SCHEMA] SubcategoryFieldDefinitions key column check failed (non-fatal)");
+        }
+
+        // Post-migration schema guards (SQLite only; migrations are source of truth for SqlServer)
+        if (!isSqlServer && sqliteDbPath != null)
+        {
         await EnsureSubcategoryFieldDefinitionsSchemaAsync(context, logger, sqliteDbPath);
-
-        // Ensure Categories.NormalizedName exists (fixes GET /api/categories when column was never migrated)
         await EnsureCategoriesNormalizedNameColumnExistsAsync(context, logger);
-
-        // Also verify Subcategories table exists (required for foreign key)
         await EnsureSubcategoriesTableExistsAsync(context, logger, sqliteDbPath);
-        
-        // Ensure IsSupervisor column exists in Technicians table
         await EnsureIsSupervisorColumnExistsAsync(context, logger, sqliteDbPath);
-        
-        // Ensure Users table has lockout columns
         await EnsureUserLockoutColumnsExistAsync(context, logger, sqliteDbPath);
-        
-        // Ensure Technicians table has soft delete columns
         await EnsureTechnicianSoftDeleteColumnsExistAsync(context, logger, sqliteDbPath);
-        
-        // Verify TicketTechnicianAssignments table exists (critical for ticket queries)
         await EnsureTicketTechnicianAssignmentsTableExistsAsync(context, logger, sqliteDbPath);
+        }
 
-        // Verify TechnicianSubcategoryPermissions table exists (RBAC for Technician/Supervisor ticket listing)
+        // SQLite-only schema guards (migrations are source of truth for SqlServer)
+        if (!isSqlServer)
+        {
         await EnsureTechnicianSubcategoryPermissionsTableExistsAsync(context, logger);
-
-        // Dev-only SQLite guard for missing ClaimedAtUtc columns
         if (app.Environment.IsDevelopment() &&
             context.Database.ProviderName?.Contains("Sqlite", StringComparison.OrdinalIgnoreCase) == true)
         {
             await EnsureClaimedAtUtcColumnsExistAsync(context, logger);
         }
-        
-        // Verify TicketActivityEvents table exists (critical for ticket queries)
         await EnsureTicketActivityEventsTableExistsAsync(context, logger);
-        
-        // Verify TicketFieldValues table has UpdatedAt column
         await EnsureTicketFieldValuesUpdatedAtColumnExistsAsync(context, logger);
-        
-        // Clean up invalid GUIDs in TicketFieldValues
         await CleanupInvalidTicketFieldValuesAsync(context, logger);
+        }
 
-        // One-time bootstrap admin when Users table is empty (config: BootstrapAdmin:Email, :Password, :FullName).
-        // Skip bootstrap when Dev seeding will run so Seed is the single source of truth and we avoid duplicate Users.Email.
-        if (app.Environment.IsDevelopment() || enableDevSeeding)
-        {
-            logger.LogInformation("[BOOTSTRAP] Skipped (Development or EnableDevSeeding); seed will create/update users.");
-        }
-        else
-        {
-            var requireStrongBootstrap = app.Environment.IsProduction() || Ticketing.Backend.Infrastructure.StartupValidation.IsProductionHandoffMode(config);
-            await BootstrapAdminOnceIfNoUsersAsync(context, passwordHasher, config, logger, requireStrongBootstrap);
-        }
-    }
-    catch (Exception ex)
-    {
-        var fullException = ex.ToString();
-        logger.LogError(ex, "[MIGRATION] Error applying migrations: {Error}. Full exception: {FullException}", ex.Message, fullException);
-        LogStartup($"[MIGRATION] Error applying migrations: {ex.Message}. Full exception: {fullException}");
-        
-        // If migration fails due to column already existing, that's okay
-        // Check if it's a SQLite error about column already existing
-        if (ex.Message.Contains("duplicate column") || ex.Message.Contains("already exists"))
-        {
-            logger.LogWarning("[MIGRATION] Column may already exist - this is acceptable. Continuing...");
-        }
-        else if (ex.Message.Contains("no such column"))
-        {
-            // Schema drift detected - schema guard will handle it
-            logger.LogWarning("[MIGRATION] Schema drift detected - schema guard will attempt to fix on next startup");
-        }
-        else
-        {
-            // Re-throw if it's a different error
-            throw;
-        }
+        // Bootstrap (Production): handled below via BootstrapSeederService when Bootstrap:Enabled and users empty.
     }
 
     if (app.Environment.IsDevelopment() || enableDevSeeding)
@@ -2268,7 +2312,12 @@ using (var scope = app.Services.CreateScope())
     else
     {
         logger.LogInformation("[SEED] Skipped in Production");
-        await BootstrapUsersIfEmptyAsync(context, passwordHasher, logger);
+        var bootstrapSeeder = services.GetRequiredService<Ticketing.Backend.Infrastructure.Data.BootstrapSeederService>();
+        var bootstrapResult = await bootstrapSeeder.RunIfEmptyAsync();
+        if (bootstrapResult.Seeded)
+            logger.LogInformation("[BOOTSTRAP] Seed applied: {Count} user(s).", bootstrapResult.UsersCreated);
+        else
+            logger.LogInformation("[BOOTSTRAP] Seed skipped: {Reason}", bootstrapResult.Message);
 
         // Minimal categories when table is empty or first category has no subcategories (no deletes, no migrations, INSERT only)
         var categoryCount = await context.Categories.CountAsync();
@@ -2444,59 +2493,86 @@ app.Use(async (context, next) =>
     await next();
 });
 
-app.UseForwardedHeaders(new ForwardedHeadersOptions
+// Forwarded headers for IIS/reverse proxy: X-Forwarded-Proto (scheme) and X-Forwarded-For (client IP).
+// MUST run before UseAuthentication so Request.IsHttps and cookie Secure/SameSite are correct when TLS is terminated at IIS.
+var forwardedOptions = new ForwardedHeadersOptions
 {
     ForwardedHeaders =
         ForwardedHeaders.XForwardedProto |
         ForwardedHeaders.XForwardedFor
-});
+};
+forwardedOptions.KnownNetworks.Clear();
+forwardedOptions.KnownProxies.Clear();
+app.UseForwardedHeaders(forwardedOptions);
 
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseMiddleware<Ticketing.Backend.Infrastructure.Auth.WindowsAuthModeMiddleware>();
 
 app.MapGet("/api/ping", () => Results.Ok(new { message = "pong" }));
 
-// Health endpoint for connectivity checks (primary)
-// CRITICAL: This endpoint is used by frontend to verify backend is reachable
-app.MapGet("/api/health", async (AppDbContext dbContext, IConfiguration configuration) =>
+// Health endpoint for connectivity checks (primary). Safe: provider from DbContext, redacted connection only (no secrets).
+// CRITICAL: This endpoint is used by frontend and verify-prod.ps1; schema must match docs (provider, database.*, migration indicators).
+app.MapGet("/api/health", async (AppDbContext dbContext, IConfiguration configuration, Ticketing.Backend.Infrastructure.Data.DatabaseOptions databaseOptions) =>
 {
     var logger = app.Services.GetRequiredService<ILogger<Program>>();
-    
-    // Get DB path from connection string
+    var isSqlServerHealth = databaseOptions.IsSqlServer;
+
     var connectionString = configuration.GetConnectionString("DefaultConnection") ?? "Data Source=App_Data/ticketing.db";
     string dbPath = "unknown";
+    string connectionInfoRedacted = "unknown";
     bool canConnectToDb = false;
     bool dbFileExists = false;
     int categoryCount = 0;
     int ticketCount = 0;
     int userCount = 0;
     string? dbError = null;
-    
+    int? pendingMigrationsCount = null;
+    string? lastMigrationId = null;
+
+    // Derive provider from DbContext.Database.ProviderName (stable; no config drift)
+    string providerDisplay = databaseOptions.NormalizedProvider;
     try
     {
-        // Extract DB path from connection string
-        if (connectionString.StartsWith("Data Source=", StringComparison.OrdinalIgnoreCase))
+        var pn = dbContext.Database.ProviderName ?? "";
+        if (pn.Contains("SqlServer", StringComparison.OrdinalIgnoreCase))
+            providerDisplay = "SqlServer";
+        else if (pn.Contains("Sqlite", StringComparison.OrdinalIgnoreCase))
+            providerDisplay = "Sqlite";
+    }
+    catch { /* fallback to databaseOptions already set */ }
+
+    try
+    {
+        if (isSqlServerHealth)
         {
-            var extractedPath = connectionString.Substring("Data Source=".Length).Trim();
-            if (Path.IsPathRooted(extractedPath))
+            try
             {
-                dbPath = extractedPath;
+                var csb = new SqlConnectionStringBuilder(connectionString);
+                dbPath = $"Server={csb.DataSource};Database={csb.InitialCatalog}";
+                connectionInfoRedacted = dbPath;
             }
-            else
-            {
-                // Resolve relative path
-                var contentRoot = app.Environment.ContentRootPath;
-                dbPath = Path.Combine(contentRoot, extractedPath);
-            }
+            catch { dbPath = "SqlServer"; connectionInfoRedacted = "SqlServer"; }
+            canConnectToDb = await dbContext.Database.CanConnectAsync();
+            dbFileExists = canConnectToDb;
         }
-        
-        // Check if DB file exists
-        dbFileExists = File.Exists(dbPath);
-        
-        // Test DB connection
-        canConnectToDb = await dbContext.Database.CanConnectAsync();
-        
-        // If connected, check actual data counts
+        else
+        {
+            if (connectionString.StartsWith("Data Source=", StringComparison.OrdinalIgnoreCase))
+            {
+                var extractedPath = connectionString.Substring("Data Source=".Length).Trim();
+                if (extractedPath.IndexOf(';') >= 0)
+                    extractedPath = extractedPath.Substring(0, extractedPath.IndexOf(';')).Trim();
+                if (Path.IsPathRooted(extractedPath))
+                    dbPath = extractedPath;
+                else
+                    dbPath = Path.Combine(app.Environment.ContentRootPath, extractedPath);
+            }
+            connectionInfoRedacted = dbPath;
+            dbFileExists = File.Exists(dbPath);
+            canConnectToDb = await dbContext.Database.CanConnectAsync();
+        }
+
         if (canConnectToDb)
         {
             try
@@ -2504,14 +2580,25 @@ app.MapGet("/api/health", async (AppDbContext dbContext, IConfiguration configur
                 categoryCount = await dbContext.Categories.CountAsync();
                 ticketCount = await dbContext.Tickets.CountAsync();
                 userCount = await dbContext.Users.CountAsync();
-                
-                logger.LogInformation("[HEALTH] DB Stats: Categories={Categories}, Tickets={Tickets}, Users={Users}", 
+                logger.LogInformation("[HEALTH] DB Stats: Categories={Categories}, Tickets={Tickets}, Users={Users}",
                     categoryCount, ticketCount, userCount);
             }
             catch (Exception countEx)
             {
                 dbError = $"Count query failed: {countEx.Message}";
                 logger.LogWarning(countEx, "[HEALTH] Failed to query data counts");
+            }
+
+            try
+            {
+                var pending = await dbContext.Database.GetPendingMigrationsAsync();
+                pendingMigrationsCount = pending.Count();
+                var applied = await dbContext.Database.GetAppliedMigrationsAsync();
+                lastMigrationId = applied.OrderBy(x => x).LastOrDefault();
+            }
+            catch (Exception migEx)
+            {
+                logger.LogWarning(migEx, "[HEALTH] Could not get migration status (pending/last): {Message}", migEx.Message);
             }
         }
     }
@@ -2520,35 +2607,52 @@ app.MapGet("/api/health", async (AppDbContext dbContext, IConfiguration configur
         dbError = ex.Message;
         logger.LogWarning(ex, "[HEALTH] Could not verify DB connection: {Error}", ex.Message);
     }
-    
-    // Determine overall health status
-    var isHealthy = canConnectToDb && dbFileExists;
+
+    var isHealthy = isSqlServerHealth ? canConnectToDb : (canConnectToDb && dbFileExists);
     var hasData = categoryCount > 0 || userCount > 0;
-    
-    logger.LogInformation("[HEALTH] Check complete: Connected={Connected}, FileExists={FileExists}, HasData={HasData}, Path={Path}",
-        canConnectToDb, dbFileExists, hasData, dbPath);
-    
+    // path: sqlite file path when Sqlite, null when SqlServer (do not expose server path as "path")
+    string? pathValue = string.Equals(providerDisplay, "Sqlite", StringComparison.Ordinal) ? dbPath : null;
+
+    logger.LogInformation("[HEALTH] Check complete: Provider={Provider}, Connected={Connected}, HasData={HasData}",
+        providerDisplay, canConnectToDb, hasData);
+
+    // Safe provider/env diagnostics: env presence flags only (no secrets)
+    var effectiveEnvVarsPresent = new
+    {
+        Jwt__Secret = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("Jwt__Secret")),
+        ConnectionStrings__DefaultConnection = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection")),
+        Database__Provider = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("Database__Provider")),
+        Database__AutoMigrateOnStartup = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("Database__AutoMigrateOnStartup")),
+        Bootstrap__Enabled = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("Bootstrap__Enabled")),
+        CompanyDirectory__Enabled = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CompanyDirectory__Enabled")),
+        AuthCookies__SecurePolicy = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AuthCookies__SecurePolicy")),
+        AuthCookies__SameSite = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AuthCookies__SameSite"))
+    };
+
+    // Stable response shape for verify-prod.ps1 and load balancers (see docs/01_Runbook/HEALTH_SCHEMA.md)
     return Results.Ok(new
     {
         ok = isHealthy,
         status = isHealthy ? "healthy" : "degraded",
+        environment = app.Environment.EnvironmentName,
+        contentRoot = app.Environment.ContentRootPath,
         database = new
         {
-            path = dbPath,
-            fileExists = dbFileExists,
+            provider = providerDisplay,
+            connectionInfoRedacted,
+            path = pathValue,
             canConnect = canConnectToDb,
-            error = dbError,
+            error = (string?)dbError,
             dataCounts = new
             {
                 categories = categoryCount,
                 tickets = ticketCount,
                 users = userCount
-            }
+            },
+            pendingMigrationsCount,
+            lastMigrationId
         },
-        hasData = hasData,
-        timestamp = DateTime.UtcNow,
-        environment = app.Environment.EnvironmentName,
-        contentRoot = app.Environment.ContentRootPath
+        effectiveEnvVarsPresent
     });
 });
 
@@ -2621,48 +2725,66 @@ app.MapGet("/api/admin/reports/technician-work", async (
 .RequireAuthorization("AdminOnly");
 
 // Backward-compatible health endpoint (also at /health for compatibility)
-app.MapGet("/health", async (AppDbContext dbContext, IConfiguration configuration) =>
+app.MapGet("/health", async (AppDbContext dbContext, IConfiguration configuration, Ticketing.Backend.Infrastructure.Data.DatabaseOptions databaseOptions) =>
 {
     var logger = app.Services.GetRequiredService<ILogger<Program>>();
+    var isSqlServerHealth = databaseOptions.IsSqlServer;
+
     var connectionString = configuration.GetConnectionString("DefaultConnection") ?? "Data Source=App_Data/ticketing.db";
     string dbPath = "unknown";
     bool canConnectToDb = false;
     bool dbFileExists = false;
-    
+    int userCount = 0;
+    int categoryCount = 0;
     try
     {
-        if (connectionString.Contains("Data Source="))
+        if (isSqlServerHealth)
         {
-            var extractedPath = connectionString.Split(new[] { "Data Source=" }, StringSplitOptions.None)[1].Split(';')[0].Trim();
-            if (Path.IsPathRooted(extractedPath))
-            {
-                dbPath = extractedPath;
-            }
-            else
-            {
-                var contentRoot = app.Environment.ContentRootPath;
-                dbPath = Path.Combine(contentRoot, extractedPath);
-            }
+            try { var csb = new SqlConnectionStringBuilder(connectionString); dbPath = $"Server={csb.DataSource};Database={csb.InitialCatalog}"; }
+            catch { dbPath = "SqlServer"; }
+            canConnectToDb = await dbContext.Database.CanConnectAsync();
+            dbFileExists = canConnectToDb;
         }
-        dbFileExists = File.Exists(dbPath);
-        canConnectToDb = await dbContext.Database.CanConnectAsync();
+        else
+        {
+            if (connectionString.Contains("Data Source="))
+            {
+                var extractedPath = connectionString.Split(new[] { "Data Source=" }, StringSplitOptions.None)[1].Split(';')[0].Trim();
+                dbPath = Path.IsPathRooted(extractedPath) ? extractedPath : Path.Combine(app.Environment.ContentRootPath, extractedPath);
+            }
+            dbFileExists = File.Exists(dbPath);
+            canConnectToDb = await dbContext.Database.CanConnectAsync();
+        }
+        if (canConnectToDb)
+        {
+            try
+            {
+                userCount = await dbContext.Users.CountAsync();
+                categoryCount = await dbContext.Categories.CountAsync();
+            }
+            catch { /* non-fatal */ }
+        }
     }
     catch (Exception ex)
     {
         logger.LogWarning(ex, "[HEALTH] Could not verify DB connection: {Error}", ex.Message);
     }
-    
+    var hasData = categoryCount > 0 || userCount > 0;
+    var isHealthy = isSqlServerHealth ? canConnectToDb : (canConnectToDb && dbFileExists);
     return Results.Ok(new
     {
-        ok = canConnectToDb && dbFileExists,
-        status = canConnectToDb && dbFileExists ? "healthy" : "degraded",
+        ok = isHealthy,
+        status = isHealthy ? "healthy" : "degraded",
         timestamp = DateTime.UtcNow,
         environment = app.Environment.EnvironmentName,
+        hasData,
         database = new
         {
+            provider = databaseOptions.NormalizedProvider,
             path = dbPath,
             fileExists = dbFileExists,
-            connected = canConnectToDb
+            connected = canConnectToDb,
+            usersCount = userCount
         }
     });
 });
@@ -2672,7 +2794,8 @@ app.MapGet("/health", async (AppDbContext dbContext, IConfiguration configuratio
 app.MapGet("/api/debug/data-status", async (
     AppDbContext dbContext,
     IConfiguration configuration,
-    IWebHostEnvironment env) =>
+    IWebHostEnvironment env,
+    Ticketing.Backend.Infrastructure.Data.DatabaseOptions databaseOptions) =>
 {
     if (!env.IsDevelopment())
     {
@@ -2682,18 +2805,21 @@ app.MapGet("/api/debug/data-status", async (
     var logger = app.Services.GetRequiredService<ILogger<Program>>();
     logger.LogInformation("[DEBUG] Data status check requested");
     
-    var connectionString = configuration.GetConnectionString("DefaultConnection") ?? "Data Source=App_Data/ticketing.db";
-    var dbPath = sqliteDbPath; // Use the resolved path from startup
+    var provider = databaseOptions.NormalizedProvider;
+    var isSqlServerDebug = databaseOptions.IsSqlServer;
+    var resolvedPathOrSummary = isSqlServerDebug ? databasePathOrSummary : (sqliteDbPath ?? "unknown");
+    var fileExists = !isSqlServerDebug && sqliteDbPath != null && File.Exists(sqliteDbPath);
+    var fileSizeBytes = fileExists && sqliteDbPath != null ? new FileInfo(sqliteDbPath).Length : 0L;
     
     var result = new
     {
         timestamp = DateTime.UtcNow,
         database = new
         {
-            configuredConnectionString = connectionString,
-            resolvedPath = dbPath,
-            fileExists = File.Exists(dbPath),
-            fileSizeBytes = File.Exists(dbPath) ? new FileInfo(dbPath).Length : 0,
+            provider = provider,
+            resolvedPathOrSummary = resolvedPathOrSummary,
+            fileExists = fileExists,
+            fileSizeBytes = fileSizeBytes,
             contentRoot = app.Environment.ContentRootPath,
             currentDirectory = Directory.GetCurrentDirectory()
         },
@@ -2759,10 +2885,10 @@ app.MapGet("/api/debug/data-status", async (
         timestamp = DateTime.UtcNow,
         database = new
         {
-            configuredConnectionString = connectionString,
-            resolvedPath = dbPath,
-            fileExists = File.Exists(dbPath),
-            fileSizeBytes = File.Exists(dbPath) ? new FileInfo(dbPath).Length : 0,
+            provider = provider,
+            resolvedPathOrSummary = resolvedPathOrSummary,
+            fileExists = fileExists,
+            fileSizeBytes = fileSizeBytes,
             contentRoot = app.Environment.ContentRootPath,
             currentDirectory = Directory.GetCurrentDirectory()
         },
@@ -2860,6 +2986,7 @@ if (Directory.Exists(uploadsPath))
     });
 }
 
+// Route mapping is unconditional (all environments). Do not gate MapControllers or /api/health on IsDevelopment().
 app.MapControllers();
 
 // =======================
@@ -2869,6 +2996,8 @@ app.MapControllers();
 // Frontend clients connect to /hubs/tickets to receive instant updates
 app.MapHub<Ticketing.Backend.Infrastructure.Hubs.TicketHub>("/hubs/tickets").RequireCors("DevCors");
 app.Logger.LogInformation("[SignalR] Hub mapped at {HubRoute}", "/hubs/tickets");
+
+app.Logger.LogInformation("[STARTUP] Routes mapped: Controllers=ON, Health=/api/health");
 
 // =======================
 // Port 5000 Preflight Check (Development only)

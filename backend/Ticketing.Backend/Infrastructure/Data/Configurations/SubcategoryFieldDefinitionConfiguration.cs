@@ -16,7 +16,7 @@ public class SubcategoryFieldDefinitionConfiguration : IEntityTypeConfiguration<
         builder.Property(f => f.SubcategoryId).IsRequired();
         builder.Property(f => f.Name).IsRequired().HasMaxLength(200);
         builder.Property(f => f.Label).IsRequired().HasMaxLength(200);
-        builder.Property(f => f.Key).IsRequired().HasMaxLength(100);
+        builder.Property(f => f.FieldKey).IsRequired().HasMaxLength(100);
         builder.Property(f => f.Type).IsRequired().HasConversion<string>();
         builder.Property(f => f.IsRequired).IsRequired().HasDefaultValue(false);
         builder.Property(f => f.DefaultValue).HasMaxLength(500);
@@ -34,7 +34,7 @@ public class SubcategoryFieldDefinitionConfiguration : IEntityTypeConfiguration<
             .OnDelete(DeleteBehavior.Cascade);
         
         // Unique constraint: Key must be unique per subcategory
-        builder.HasIndex(f => new { f.SubcategoryId, f.Key }).IsUnique();
+        builder.HasIndex(f => new { f.SubcategoryId, f.FieldKey }).IsUnique();
         
         // Index for efficient queries
         builder.HasIndex(f => f.SubcategoryId);

@@ -115,49 +115,67 @@ public static class SeedData
         // Align backend categories with frontend slugs
         var categorySeeds = new[]
         {
-            new { Name = "Hardware", Description = "Laptops and peripherals", Subs = new[] { "Computer Not Working", "Printer Issues", "Monitor Problems" } },
-            new { Name = "Software", Description = "OS and application issues", Subs = new[] { "OS Issues", "Application Problems", "Software Installation" } },
-            new { Name = "Network", Description = "Connectivity and WiFi", Subs = new[] { "Internet Connection", "WiFi Problems", "Network Drive" } },
-            new { Name = "Email", Description = "Mailbox and clients", Subs = new[] { "Email Not Working", "Email Setup", "Email Sync" } },
-            new { Name = "Security", Description = "Passwords and threats", Subs = new[] { "Virus / Malware", "Password Reset", "Security Incident" } },
-            new { Name = "Access", Description = "System access and permissions", Subs = new[] { "System Access", "Permission Change", "New Account" } },
+            new { Id = 1, Name = "Hardware", Description = "Laptops and peripherals", Subs = new[] { "Computer Not Working", "Printer Issues", "Monitor Problems" } },
+            new { Id = 2, Name = "Software", Description = "OS and application issues", Subs = new[] { "OS Issues", "Application Problems", "Software Installation" } },
+            new { Id = 3, Name = "Network", Description = "Connectivity and WiFi", Subs = new[] { "Internet Connection", "WiFi Problems", "Network Drive" } },
+            new { Id = 4, Name = "Email", Description = "Mailbox and clients", Subs = new[] { "Email Not Working", "Email Setup", "Email Sync" } },
+            new { Id = 5, Name = "Security", Description = "Passwords and threats", Subs = new[] { "Virus / Malware", "Password Reset", "Security Incident" } },
+            new { Id = 6, Name = "Access", Description = "System access and permissions", Subs = new[] { "System Access", "Permission Change", "New Account" } },
         };
 
+        // Pass 1: Insert missing categories (with subcategories) with explicit Ids for SQL Server (non-identity).
+        var categoriesToAdd = new List<Category>();
+        foreach (var seed in categorySeeds)
+        {
+            var exists = await context.Categories.AnyAsync(c => c.Name == seed.Name);
+            if (!exists)
+            {
+                categoriesToAdd.Add(new Category
+                {
+                    Id = seed.Id,
+                    Name = seed.Name,
+                    NormalizedName = NormalizeName(seed.Name),
+                    Description = seed.Description,
+                    Subcategories = seed.Subs
+                        .Select((s, i) => new Subcategory
+                        {
+                            Id = seed.Id * 100 + (i + 1),
+                            Name = s,
+                            CategoryId = seed.Id
+                        })
+                        .ToList()
+                });
+            }
+        }
+        if (categoriesToAdd.Count > 0)
+            context.Categories.AddRange(categoriesToAdd);
+        await context.SaveChangesAsync();
+
+        // Pass 2: Update NormalizedName/Description and add any missing subcategories on existing categories.
         foreach (var seed in categorySeeds)
         {
             var category = await context.Categories.Include(c => c.Subcategories)
                 .FirstOrDefaultAsync(c => c.Name == seed.Name);
+            if (category == null) continue;
 
-            if (category == null)
+            if (string.IsNullOrWhiteSpace(category.NormalizedName))
+                category.NormalizedName = NormalizeName(category.Name);
+            if (string.IsNullOrWhiteSpace(category.Description))
+                category.Description = seed.Description;
+
+            var existingSubNames = category.Subcategories.Select(sc => sc.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var nextSubIndex = category.Subcategories.Count;
+            foreach (var sub in seed.Subs)
             {
-                category = new Category
+                if (!existingSubNames.Contains(sub))
                 {
-                    Name = seed.Name,
-                    NormalizedName = NormalizeName(seed.Name),
-                    Description = seed.Description,
-                    Subcategories = seed.Subs.Select(s => new Subcategory { Name = s }).ToList()
-                };
-                context.Categories.Add(category);
-            }
-            else
-            {
-                if (string.IsNullOrWhiteSpace(category.NormalizedName))
-                {
-                    category.NormalizedName = NormalizeName(category.Name);
-                }
-
-                if (string.IsNullOrWhiteSpace(category.Description))
-                {
-                    category.Description = seed.Description;
-                }
-
-                var existingSubNames = category.Subcategories.Select(sc => sc.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                foreach (var sub in seed.Subs)
-                {
-                    if (!existingSubNames.Contains(sub))
+                    nextSubIndex++;
+                    category.Subcategories.Add(new Subcategory
                     {
-                        category.Subcategories.Add(new Subcategory { Name = sub });
-                    }
+                        Id = category.Id * 100 + nextSubIndex,
+                        Name = sub,
+                        CategoryId = category.Id
+                    });
                 }
             }
         }

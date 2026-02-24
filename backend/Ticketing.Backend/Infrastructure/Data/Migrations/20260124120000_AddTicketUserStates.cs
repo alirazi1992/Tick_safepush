@@ -1,10 +1,13 @@
 using System;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Ticketing.Backend.Infrastructure.Data;
 
 #nullable disable
 
 namespace Ticketing.Backend.Infrastructure.Data.Migrations
 {
+    // Discovery attributes added for SQL Server EF migration discovery.
     public partial class AddTicketUserStates : Migration
     {
         protected override void Up(MigrationBuilder migrationBuilder)
@@ -13,10 +16,10 @@ namespace Ticketing.Backend.Infrastructure.Data.Migrations
                 name: "TicketUserStates",
                 columns: table => new
                 {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    TicketId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    UserId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    LastSeenAt = table.Column<DateTime>(type: "TEXT", nullable: true)
+                    Id = table.Column<Guid>(nullable: false),
+                    TicketId = table.Column<Guid>(nullable: false),
+                    UserId = table.Column<Guid>(nullable: false),
+                    LastSeenAt = table.Column<DateTime>(nullable: true)
                 },
                 constraints: table =>
                 {

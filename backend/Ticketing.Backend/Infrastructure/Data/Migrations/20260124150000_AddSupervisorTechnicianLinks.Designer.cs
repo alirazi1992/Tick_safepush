@@ -22,18 +22,10 @@ namespace Ticketing.Backend.Infrastructure.Data.Migrations
             modelBuilder.Entity("Ticketing.Backend.Domain.Entities.SupervisorTechnicianLink", b =>
                 {
                     b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<Guid>("SupervisorUserId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<Guid>("TechnicianUserId")
-                        .HasColumnType("TEXT");
-
+                        .ValueGeneratedOnAdd();
+                    b.Property<DateTime>("CreatedAt");
+                    b.Property<Guid>("SupervisorUserId");
+                    b.Property<Guid>("TechnicianUserId");
                     b.HasKey("Id");
 
                     b.HasIndex("SupervisorUserId", "TechnicianUserId")

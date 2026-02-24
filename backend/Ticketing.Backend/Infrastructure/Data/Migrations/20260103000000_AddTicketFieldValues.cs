@@ -1,10 +1,13 @@
 using System;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Ticketing.Backend.Infrastructure.Data;
 
 #nullable disable
 
 namespace Ticketing.Backend.Infrastructure.Data.Migrations
 {
+    // Discovery attributes added for SQL Server EF migration discovery.
     /// <inheritdoc />
     public partial class AddTicketFieldValues : Migration
     {
@@ -15,12 +18,12 @@ namespace Ticketing.Backend.Infrastructure.Data.Migrations
                 name: "TicketFieldValues",
                 columns: table => new
                 {
-                    Id = table.Column<string>(type: "TEXT", nullable: false),
-                    TicketId = table.Column<string>(type: "TEXT", nullable: false),
-                    FieldDefinitionId = table.Column<int>(type: "INTEGER", nullable: false),
-                    Value = table.Column<string>(type: "TEXT", maxLength: 2000, nullable: false),
-                    CreatedAt = table.Column<string>(type: "TEXT", nullable: false),
-                    UpdatedAt = table.Column<string>(type: "TEXT", nullable: true)
+                    Id = table.Column<Guid>(nullable: false),
+                    TicketId = table.Column<Guid>(nullable: false),
+                    FieldDefinitionId = table.Column<int>(nullable: false),
+                    Value = table.Column<string>(maxLength: 2000, nullable: false),
+                    CreatedAt = table.Column<string>(nullable: false),
+                    UpdatedAt = table.Column<string>(nullable: true)
                 },
                 constraints: table =>
                 {

@@ -42,6 +42,7 @@ public class AuthController : ControllerBase
     private readonly EmergencyAdminOptions _emergencyAdminOptions;
     private readonly IJwtTokenGenerator _jwtTokenGenerator;
     private readonly IPasswordHasher<User> _passwordHasher;
+    private readonly AuthCookiesOptions _authCookiesOptions;
 
     public AuthController(
         IUserService userService,
@@ -51,6 +52,7 @@ public class AuthController : ControllerBase
         IAdUserLookup adUserLookup,
         IOptions<WindowsAuthOptions> windowsAuthOptions,
         IOptions<EmergencyAdminOptions> emergencyAdminOptions,
+        IOptions<AuthCookiesOptions> authCookiesOptions,
         IJwtTokenGenerator jwtTokenGenerator,
         IPasswordHasher<User> passwordHasher)
     {
@@ -61,8 +63,24 @@ public class AuthController : ControllerBase
         _adUserLookup = adUserLookup;
         _windowsAuthOptions = windowsAuthOptions?.Value ?? new WindowsAuthOptions();
         _emergencyAdminOptions = emergencyAdminOptions?.Value ?? new EmergencyAdminOptions();
+        _authCookiesOptions = authCookiesOptions?.Value ?? new AuthCookiesOptions();
         _jwtTokenGenerator = jwtTokenGenerator;
         _passwordHasher = passwordHasher;
+    }
+
+    private SameSiteMode GetSameSiteMode()
+    {
+        var v = _authCookiesOptions.SameSite?.Trim();
+        if (string.Equals(v, "None", StringComparison.OrdinalIgnoreCase)) return SameSiteMode.None;
+        if (string.Equals(v, "Strict", StringComparison.OrdinalIgnoreCase)) return SameSiteMode.Strict;
+        return SameSiteMode.Lax;
+    }
+
+    private bool GetSecure()
+    {
+        var v = _authCookiesOptions.SecurePolicy?.Trim();
+        if (string.Equals(v, "Always", StringComparison.OrdinalIgnoreCase)) return true;
+        return Request.IsHttps; // SameAsRequest (default)
     }
 
     private void SetAccessCookie(string token)
@@ -70,8 +88,8 @@ public class AuthController : ControllerBase
         Response.Cookies.Append(AccessCookieName, token, new CookieOptions
         {
             HttpOnly = true,
-            SameSite = SameSiteMode.Lax,
-            Secure = Request.IsHttps,
+            SameSite = GetSameSiteMode(),
+            Secure = GetSecure(),
             Path = "/",
             Expires = DateTimeOffset.UtcNow.AddMinutes(30)
         });
@@ -82,9 +100,9 @@ public class AuthController : ControllerBase
         Response.Cookies.Append(AccessCookieName, string.Empty, new CookieOptions
         {
             Path = "/",
-            SameSite = SameSiteMode.Lax,
+            SameSite = GetSameSiteMode(),
             HttpOnly = true,
-            Secure = Request.IsHttps,
+            Secure = GetSecure(),
             Expires = DateTimeOffset.UtcNow.AddDays(-1)
         });
     }
@@ -451,11 +469,66 @@ public class AuthController : ControllerBase
 
         return Ok(new
         {
-            windowsAuthEnabled = _windowsAuthOptions.Enabled,
+            windowsAuthEnabled = _windowsAuthOptions.IsWindowsAuthAvailable,
+            windowsAuthMode = _windowsAuthOptions.EffectiveMode,
             hasAuthorizationBearer = hasBearer,
             isAuthenticated = User?.Identity?.IsAuthenticated ?? false,
             authenticationType = User?.Identity?.AuthenticationType ?? null,
             identityName = User?.Identity?.Name ?? null
+        });
+    }
+
+    // ------------------------------
+    // Windows login: when Windows identity is present, issue JWT cookie (same shape as login).
+    // Off: middleware returns 403. Optional/Enforce: no Windows identity -> 401 with WWW-Authenticate: Negotiate.
+    // ------------------------------
+    [HttpGet("windows")]
+    [HttpPost("windows")]
+    [AllowAnonymous]
+    public async Task<IActionResult> WindowsLogin()
+    {
+        if (!_windowsAuthOptions.IsWindowsAuthAvailable)
+        {
+            return StatusCode(403, new { error = "WINDOWS_AUTH_DISABLED", message = "Windows authentication is disabled. Use email/password login." });
+        }
+        var domainUser = User?.Identity?.Name;
+        var isWindowsIdentity = User?.Identity?.AuthenticationType?.Contains("Negotiate", StringComparison.OrdinalIgnoreCase) == true;
+        if (string.IsNullOrWhiteSpace(domainUser) || !isWindowsIdentity)
+        {
+            Response.Headers["WWW-Authenticate"] = "Negotiate";
+            return Unauthorized(new { error = "WINDOWS_IDENTITY_MISSING", message = "No Windows identity. Use Windows Integrated Authentication or email/password login." });
+        }
+        var samAccountName = domainUser.Contains('\\')
+            ? domainUser.Substring(domainUser.LastIndexOf('\\') + 1)
+            : domainUser.Contains('@')
+                ? domainUser.Substring(0, domainUser.IndexOf('@'))
+                : domainUser;
+        var email = _windowsUserMapResolver.ResolveEmail(domainUser);
+        if (string.IsNullOrEmpty(email))
+            email = await _adUserLookup.GetEmailBySamAccountNameAsync(samAccountName, HttpContext.RequestAborted);
+        if (string.IsNullOrEmpty(email))
+        {
+            return StatusCode(403, new { message = "Could not resolve Windows user to an email. Contact administrator.", error = "AD_EMAIL_NOT_FOUND" });
+        }
+        var user = await _userService.GetByEmailAsync(email);
+        if (user == null)
+            return NotFound();
+        var roleStr = user.Role.ToString();
+        var landingPath = !string.IsNullOrWhiteSpace(user.LandingPath) ? user.LandingPath : LandingPathResolver.GetLandingPath(user.Role, user.IsSupervisor);
+        if (!HasValidRoleAndLandingPath(roleStr, landingPath))
+            return Unauthorized(new { error = "missing_role", message = "User has no valid role or landing path assigned." });
+        var dbUser = await _context.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == user.Id);
+        if (dbUser == null)
+            return NotFound();
+        var token = _jwtTokenGenerator.GenerateToken(dbUser, user.IsSupervisor, 30);
+        SetAccessCookie(token);
+        return Ok(new
+        {
+            ok = true,
+            role = roleStr,
+            isSupervisor = user.IsSupervisor,
+            landingPath,
+            user
         });
     }
 
@@ -466,6 +539,10 @@ public class AuthController : ControllerBase
     [AllowAnonymous]
     public async Task<IActionResult> WhoAmI()
     {
+        // Diagnostic header for cookie auth (safe: only indicates presence of cookie, not value)
+        var cookiePresent = Request.Cookies.TryGetValue(AccessCookieName, out var cookieVal) && !string.IsNullOrEmpty(cookieVal);
+        Response.Headers["X-Auth-Cookie-Present"] = cookiePresent ? "true" : "false";
+
         if (User?.Identity?.IsAuthenticated != true)
         {
             return Ok(new
@@ -576,8 +653,8 @@ public class AuthController : ControllerBase
     {
         if (User?.Identity?.IsAuthenticated != true)
         {
-            if (!_windowsAuthOptions.Enabled)
-                return Unauthorized(new { error = "JWT_REQUIRED", message = "WindowsAuth is disabled; use email/password login to obtain JWT." });
+            if (!_windowsAuthOptions.IsWindowsAuthAvailable)
+                return Unauthorized(new { error = "JWT_REQUIRED", message = "Windows auth is off; use email/password login to obtain JWT." });
             return Unauthorized(new { error = "WINDOWS_IDENTITY_MISSING", message = "Windows auth expected but no Windows identity was provided by IIS. Check IIS Windows Authentication settings." });
         }
 
@@ -599,8 +676,8 @@ public class AuthController : ControllerBase
         var domainUser = User.Identity?.Name;
         if (string.IsNullOrWhiteSpace(domainUser))
         {
-            if (!_windowsAuthOptions.Enabled)
-                return Unauthorized(new { error = "JWT_REQUIRED", message = "WindowsAuth is disabled; use email/password login to obtain JWT." });
+            if (!_windowsAuthOptions.IsWindowsAuthAvailable)
+                return Unauthorized(new { error = "JWT_REQUIRED", message = "Windows auth is off; use email/password login to obtain JWT." });
             return Unauthorized(new { error = "WINDOWS_IDENTITY_MISSING", message = "Windows auth expected but no Windows identity was provided by IIS. Check IIS Windows Authentication settings." });
         }
 

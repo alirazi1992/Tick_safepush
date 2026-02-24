@@ -62,8 +62,8 @@ When the main server or directory is unavailable, an **emergency admin** (break-
 - **ASPNETCORE_ENVIRONMENT**: Set to `Production` on the production host so that production validation and SQLite rejection run.  
 - **ProductionHandoffMode** (optional): When set to `true`, the app applies production-style validation and disables debug/maintenance endpoints even if environment is not Production.
 
-**Bootstrap admin (when DB is empty)**  
-- **BootstrapAdmin__Password** must be provided securely in production when the database has no users (e.g. via environment variable or `appsettings.Production.json`). Do not commit this value to source control.
+**Bootstrap users (first run only)**  
+- To seed initial users when the database is empty, set **Bootstrap:Enabled** and admin credentials. In Production, **Bootstrap:Enabled** defaults to **false**; set it explicitly for the first run. See [BOOTSTRAP.md](BOOTSTRAP.md) for exact environment variables (`Bootstrap__Enabled`, `Bootstrap__AdminEmail`, `Bootstrap__AdminPassword`, and optional test accounts). Do not commit passwords; use environment variables.
 
 ---
 
@@ -89,8 +89,14 @@ Roles and landing paths are stored and managed **only in the TikQ database**. Th
 **HTTPS**  
 Use HTTPS in production for the backend and frontend. Configure certificates and bindings on the host (IIS or Kestrel reverse proxy).
 
-**Cookie flags**  
-When using cookie-based auth, ensure appropriate flags (e.g. Secure, SameSite) for your environment. Cookie domain and path must match how the frontend is served (e.g. subpath or different subdomain may require configuration).
+**Cookie flags and IIS / reverse proxy**  
+When using cookie-based auth behind IIS or another reverse proxy:
+
+- **Forwarded headers**: The app is configured to use `X-Forwarded-Proto` and `X-Forwarded-For` with `KnownNetworks`/`KnownProxies` cleared so the app trusts the proxy. This ensures `Request.IsHttps` is correct when TLS is terminated at IIS.
+- **AuthCookies** (optional config):
+  - `AuthCookies:SameSite` — `"Lax"` (default), `"Strict"`, or `"None"` (use `"None"` only for cross-site; requires Secure).
+  - `AuthCookies:SecurePolicy` — `"SameAsRequest"` (cookie Secure only when request is HTTPS) or `"Always"` (recommended when behind HTTPS in production). For IIS with HTTPS, set `AuthCookies:SecurePolicy` to `"Always"` (e.g. in appsettings.Production.json or env `AuthCookies__SecurePolicy=Always`).
+- Cookies are set with `HttpOnly=true`, `Path=/`. The `/api/auth/whoami` response includes a diagnostic header `X-Auth-Cookie-Present: true|false` (safe; indicates only presence of the auth cookie).
 
 **Secret storage**  
 Do not commit JWT secrets or connection strings to source control. Use environment variables, a secure vault, or host-specific configuration (e.g. IIS environment variables, Azure Key Vault).
@@ -108,6 +114,9 @@ When Company Directory is enabled, users not found in TikQ are looked up in the 
 **Email/password fallback**  
 TikQ supports email/password login against the TikQ database. This can be used as the sole auth method or as fallback when Company Directory is optional or unavailable.
 
+**Windows Authentication (optional)**  
+TikQ supports Windows Integrated Auth with three modes: **Off**, **Optional**, and **Enforce**. How IT should configure IIS (Anonymous vs Windows Authentication) for each mode is described in **[WINDOWS_AUTH_IIS.md](WINDOWS_AUTH_IIS.md)**.
+
 ---
 
 ## Failure Scenarios
@@ -119,6 +128,7 @@ TikQ supports email/password login against the TikQ database. This can be used a
 | **Company DB unavailable** | Company Directory is enabled but the directory database is down or unreachable. | Restore directory availability, or temporarily disable Company Directory; ensure timeouts and monitoring are in place. |
 | **SQLite in production** | Main app database is SQLite and `AllowSqliteInProduction` is not set. | Set `ConnectionStrings:DefaultConnection` to SQL Server (or intended DB), or set `AllowSqliteInProduction=true` only if acceptable for the environment. |
 | **Bootstrap admin password** | No users in DB and bootstrap would run, but `BootstrapAdmin:Password` is missing or shorter than 8 characters. | Set `BootstrapAdmin:Email`, `BootstrapAdmin:Password` (min 8 chars), and `BootstrapAdmin:FullName` when using bootstrap for first user. |
+| **SQL login 18456 (IIS App Pool)** | Connection string uses Integrated Security (Trusted_Connection) but SQL Server has no login for the IIS App Pool identity (e.g. `IIS APPPOOL\TikQ`). App fails at startup with 500.30. | Create the Windows login and DB user: run the script in `tools/_handoff_tests/sqlserver-permissions.sql` (or `sqlserver-permissions.ps1 -DatabaseName TikQ -AppPoolName TikQ` for custom names). Then recycle the Application Pool. See [IIS_SQLSERVER_PERMISSIONS.md](IIS_SQLSERVER_PERMISSIONS.md). |
 
 **Common startup messages**  
 - *"JWT secret is not configured for production"* — Set `Jwt:Secret` or `JWT_SECRET`.  
@@ -127,6 +137,7 @@ TikQ supports email/password login against the TikQ database. This can be used a
 - *"SQLite is not allowed as the main app database in Production"* — Use SQL Server (or set `AllowSqliteInProduction=true` if acceptable).  
 - *"BootstrapAdmin:Password is missing or too short"* — Set bootstrap admin config when the database has no users.  
 - *"Cors:AllowedOrigins must be configured in production"* — Set `Cors:AllowedOrigins` in appsettings (e.g. `["https://your-frontend"]`).
+- *"Login failed for user 'IIS APPPOOL\TikQ'"* (SqlException 18456) — SQL Server has no login for the IIS App Pool identity. Run `tools/_handoff_tests/sqlserver-permissions.sql` (see [IIS_SQLSERVER_PERMISSIONS.md](IIS_SQLSERVER_PERMISSIONS.md)), then recycle the App Pool.
 
 ---
 
@@ -141,6 +152,116 @@ Demo seed data (e.g. test users with known passwords like `Test123!`) runs only 
 **Health endpoint**  
 - **URL**: `/api/health` (and `/health` for compatibility).  
 - **Auth**: Unauthenticated so load balancers and monitors can check app health without credentials.
+
+---
+
+## SQL Server deployment via deploy-iis.ps1
+
+The backend includes a PowerShell script that deploys the app to IIS and supports **SQL Server** as the database provider. The script reads database-related settings from **Machine**, **Process**, and **User** environment variables (same pattern as the JWT secret) and injects them into the application’s `web.config` so the app uses the correct provider and connection at runtime.
+
+**Script location:** `backend/Ticketing.Backend/deploy-iis.ps1` (run from that directory or ensure `$PSScriptRoot` points to the folder containing `Ticketing.Backend.csproj`).
+
+### Atomic deployment (avoids file locks)
+
+The script uses **atomic deployment** so the running app is never overwritten in place (which can cause file locks and failed updates):
+
+1. **Publish to a new versioned folder** — e.g. `C:\publish\tikq-backend-20260223143000`. The running app continues to use the previous folder until the switch.
+2. **Configure and set permissions** — web.config and ACLs are applied only to the new folder.
+3. **Switch IIS site physical path** — the site’s physical path is updated in one step to the new folder. IIS then serves from the new deployment.
+4. **Recycle application pool** — the app pool is recycled so the worker process loads the new binaries from the new path.
+5. **Optional cleanup** — after verification passes, the script can keep the last N versioned folders and remove older ones (parameter `-KeepLastNFolders`, default 5; use `0` to skip). Use this to avoid unbounded disk use while retaining rollback copies.
+
+Use this flow for all deployments so you never overwrite files that IIS has locked.
+
+### Environment variables used for database
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `Database__Provider` | No (default: **SqlServer** for this script) | `SqlServer` or `Sqlite`. For IIS deployment the script defaults to `SqlServer` if not set. |
+| `ConnectionStrings__DefaultConnection` | **Yes** when `Database__Provider=SqlServer` | SQL Server connection string. If provider is SqlServer and this is missing, the script throws with a clear error. |
+| `Database__AutoMigrateOnStartup` | No | Set to `true` to run EF Core migrations on startup (e.g. first deployment). Configurable; only injected if set. |
+
+The script reads each variable from **Process** → **Machine** → **User** (first non-empty value wins). It never logs secret values; connection strings are redacted (e.g. `Password=***`) when logged.
+
+### Validation and security
+
+- If `Database__Provider` is `SqlServer` and `ConnectionStrings__DefaultConnection` is missing or empty, the script **throws** with a clear message and does not deploy.
+- Secrets (JWT, connection strings, bootstrap passwords) are **not printed**; only variable names and redacted connection strings appear in output.
+
+### After deployment
+
+- The script **recycles the application pool** after writing `web.config`, so the app picks up the new environment variables.
+- A **verification step** runs: it calls `GET /api/health` and, when the requested provider is SqlServer, asserts that the response `database.provider` is `SqlServer`. The script outputs **PASS** or **FAIL** and fails the deploy if verification does not succeed. If the app fails to start with SQL login error 18456, the script prints an explicit message and points to the SQL permissions script and runbook.
+
+### SQL Server permissions (IIS App Pool identity)
+
+When using **Integrated Security** (e.g. `Server=.;Database=TikQ;Trusted_Connection=True;...`) under IIS, the app runs as the Application Pool identity (e.g. `IIS APPPOOL\TikQ`). SQL Server must have a **Windows login** for that identity and a **user** in the TikQ database with sufficient rights to run migrations (e.g. `db_owner` for initial setup).
+
+**If you see:** `Login failed for user 'IIS APPPOOL\TikQ'` (SqlException 18456) in the app’s stdout log or IIS 500.30 after deploy:
+
+1. **Create login, database (if missing), and user** — Run the provided SQL script in SQL Server Management Studio (SSMS), connected as a principal that can create logins and databases (e.g. `sa` or a login with `sysadmin` / `securityadmin` + `dbcreator`):
+   - **Script:** `tools/_handoff_tests/sqlserver-permissions.sql` (default: database `TikQ`, App Pool name `TikQ`).
+   - **Custom names:** Run `.\tools\_handoff_tests\sqlserver-permissions.ps1 -DatabaseName <DbName> -AppPoolName <AppPoolName>` and execute the printed SQL in SSMS.
+2. **Recycle the Application Pool** — e.g. `Restart-WebAppPool -Name TikQ` (or your App Pool name).
+3. **Verify** — `GET /api/health` should return 200 and `database.provider: "SqlServer"`. Run `.\tools\_handoff_tests\verify-prod.ps1 -ExpectProvider SqlServer`.
+
+Full step-by-step instructions and copy-paste SQL: **[IIS_SQLSERVER_PERMISSIONS.md](IIS_SQLSERVER_PERMISSIONS.md)**.
+
+### How to run verify-prod.ps1 after deployment
+
+Use the standalone verification script to confirm that the deployed backend (IIS + SQL Server) is healthy and, optionally, that login and session work.
+
+**Script location:** `tools/_handoff_tests/verify-prod.ps1`
+
+**What it does:**
+
+1. Calls **GET /api/health** and prints provider, environment, DB connectivity, and data counts (categories, tickets, users).
+2. **Asserts** that `database.provider` is the expected value (e.g. `SqlServer`) when `-ExpectProvider` is set.
+3. **Optional:** If `-LoginEmail` and `-LoginPassword` are provided, runs **POST /api/auth/login** and **GET /api/auth/whoami** to verify auth and session.
+
+Output is explicit **PASS** or **FAIL** per step and overall. Passwords and other secrets are never logged; any error text that might contain secrets is redacted.
+
+**Examples:**
+
+```powershell
+# From repo root: health only, assert SqlServer
+.\tools\_handoff_tests\verify-prod.ps1 -BaseUrl "https://tikq-api.contoso.com" -ExpectProvider SqlServer
+
+# Local IIS (e.g. after deploy-iis.ps1)
+.\tools\_handoff_tests\verify-prod.ps1 -BaseUrl "http://localhost:8080" -ExpectProvider SqlServer
+
+# With login check (use seed or bootstrap credentials; do not commit passwords)
+.\tools\_handoff_tests\verify-prod.ps1 -BaseUrl "https://tikq-api.contoso.com" -ExpectProvider SqlServer -LoginEmail "admin@example.com" -LoginPassword "YourSecurePassword"
+```
+
+**Parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `BaseUrl` | Backend base URL (default: `http://localhost:8080`). |
+| `ExpectProvider` | If set (e.g. `SqlServer`), asserts health response `database.provider` matches. Omit or pass empty to skip. |
+| `LoginEmail` | Optional. With `LoginPassword`, enables login + whoami check. |
+| `LoginPassword` | Optional. Never printed or logged. |
+| `TimeoutSeconds` | HTTP timeout (default: 15). |
+
+Exit code: **0** on full success, **1** on any failure.
+
+### Example: set variables then deploy (SQL Server)
+
+```powershell
+# Set Machine-level env vars (run as Administrator if using Machine)
+[Environment]::SetEnvironmentVariable("Database__Provider", "SqlServer", "Machine")
+[Environment]::SetEnvironmentVariable("ConnectionStrings__DefaultConnection", "Server=.;Database=TikQ;Integrated Security=true;TrustServerCertificate=true", "Machine")
+[Environment]::SetEnvironmentVariable("Database__AutoMigrateOnStartup", "true", "Machine")   # optional; for first deployment
+
+# JWT secret is still required (e.g. TikQ_JWT_SECRET or set in IIS)
+cd backend\Ticketing.Backend
+.\deploy-iis.ps1
+# Optional: keep only last 3 versioned folders (default 5; 0 = no cleanup)
+# .\deploy-iis.ps1 -KeepLastNFolders 3
+```
+
+After a successful run, the script prints **Verification: PASS** and the app is using SQL Server with the given connection string.
 
 ---
 

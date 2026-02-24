@@ -162,6 +162,39 @@ npm run dev
 
 ## Database Management
 
+### Database Provider (Sqlite / SqlServer)
+
+The backend supports two database providers, selected **only by configuration** (not by environment name):
+
+- **`Database:Provider`**: `"Sqlite"` (default) or `"SqlServer"`.
+- **`ConnectionStrings:DefaultConnection`**: For Sqlite use `Data Source=App_Data/ticketing.db` (or path). For SqlServer use a full SQL Server connection string.
+
+**Development (default):** `appsettings.Development.json` sets `Provider: Sqlite` and uses the SQLite file under `App_Data/ticketing.db`. No changes needed for local dev.
+
+**Production (SQL Server):** `appsettings.Production.json` sets `Provider: SqlServer`. Do **not** put secrets in the file. On IIS or your host, set the connection string via environment variable:
+
+- **`ConnectionStrings__DefaultConnection`** = `Server=...;Database=TikQ;User Id=...;Password=...;TrustServerCertificate=true;` (or use Integrated Security).
+
+Example (PowerShell, before starting the app):
+
+```powershell
+$env:ConnectionStrings__DefaultConnection = "Server=YOUR_SERVER;Database=TikQ;User Id=...;Password=...;TrustServerCertificate=true;"
+$env:Database__Provider = "SqlServer"
+dotnet run
+```
+
+**Rollback if SQL Server fails:** Set `Database:Provider` back to `Sqlite` (e.g. in appsettings or via `Database__Provider=Sqlite`), ensure `ConnectionStrings:DefaultConnection` points to your SQLite file, and restart. The SQLite file is never deleted or modified by the provider switch.
+
+**Smoke test (both providers):** From repo root:
+
+```powershell
+# Sqlite (backend must be running, or use -StartBackend)
+.\tools\_handoff_tests\test-db-provider.ps1 -StartBackend
+
+# SqlServer (pass your connection string)
+.\tools\_handoff_tests\test-db-provider.ps1 -StartBackend -Provider SqlServer -ConnectionString "Server=.;Database=TikQ;Integrated Security=true;TrustServerCertificate=true;"
+```
+
 ### Database Location
 
 The SQLite database is located at:
@@ -196,6 +229,24 @@ The script will:
 1. Start the backend: `dotnet run`
 2. Migrations will be applied automatically
 3. Default users will be seeded
+
+### Reset SQL Server DB (test only)
+
+Use this when the TikQ SQL Server database is partially created (e.g. after a failed migration) and you want a clean database before re-running migrations. **Destroys all data in the TikQ database — test environments only.**
+
+**Option 1 — SSMS:** Open and run the script on your SQL Server instance:
+
+```
+tools/sql/reset-tikq-db.sql
+```
+
+**Option 2 — PowerShell (requires sqlcmd):** From repo root, dry-run by default; add `-Force` to execute:
+
+```powershell
+.\tools\sql\reset-tikq-db.ps1 -Server "." -Force
+```
+
+Without `-Force`, the script only prints what it would do and exits.
 
 ### Manual Migration Commands
 

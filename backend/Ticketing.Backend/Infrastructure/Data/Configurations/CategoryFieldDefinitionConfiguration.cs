@@ -20,7 +20,7 @@ public class CategoryFieldDefinitionConfiguration : IEntityTypeConfiguration<Cat
         builder.Property(f => f.Type).IsRequired().HasConversion<string>();
         builder.Property(f => f.IsRequired).IsRequired().HasDefaultValue(false);
         builder.Property(f => f.DefaultValue).HasMaxLength(500);
-        builder.Property(f => f.OptionsJson).HasColumnType("TEXT");
+        builder.Property(f => f.OptionsJson);
         builder.Property(f => f.SortOrder).HasDefaultValue(0);
         builder.Property(f => f.IsActive).HasDefaultValue(true);
         builder.Property(f => f.CreatedAt).IsRequired();
