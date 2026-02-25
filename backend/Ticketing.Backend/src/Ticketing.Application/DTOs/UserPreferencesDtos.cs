@@ -46,7 +46,7 @@ public class UserPreferencesUpdateRequest
     public string FontSize { get; set; } = "md";
 
     [Required]
-    [RegularExpression("^(fa|en)$", ErrorMessage = "Language must be fa or en")]
+    [RegularExpression("^fa$", ErrorMessage = "Language must be fa (system is Farsi-only)")]
     public string Language { get; set; } = "fa";
 
     [Required]

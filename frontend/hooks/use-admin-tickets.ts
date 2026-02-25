@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
-import { apiRequest } from "@/lib/api-client"
+import { apiGetNoStore } from "@/lib/api-client"
 import type { ApiTicketCalendarResponse, ApiTicketStatus } from "@/lib/api-types"
 import { useAuth } from "@/lib/auth-context"
 
@@ -30,12 +30,9 @@ export function useAdminTickets(filters: AdminTicketsFilters = {}) {
         query.set("status", filters.status)
       }
 
-      const data = await apiRequest<ApiTicketCalendarResponse[]>(
+      const data = await apiGetNoStore<ApiTicketCalendarResponse[]>(
         `/api/tickets/calendar?${query.toString()}`,
-        {
-          method: "GET",
-          token,
-        }
+        { token }
       )
       setTickets(data)
     } catch (err: any) {

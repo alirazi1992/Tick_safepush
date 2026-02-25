@@ -48,9 +48,9 @@ import type { CategoriesData } from "@/services/categories-types";
 import type { Ticket, TicketPriority, TicketStatus, TicketCategory } from "@/types";
 import { getEffectiveStatus, getTicketStatusLabel, getTicketStatusColor, type TicketStatus as TicketStatusType } from "@/lib/ticket-status";
 import { formatFileSize } from "@/lib/file-upload";
-import { apiRequest } from "@/lib/api-client";
+import { apiGetNoStore } from "@/lib/api-client";
 import { getEffectiveApiBaseUrl } from "@/lib/url";
-import type { ApiTicketListItemResponse, ApiTicketMessageDto } from "@/lib/api-types";
+import type { ApiTicketListItemResponse, ApiTicketMessageDto, ApiTicketResponse } from "@/lib/api-types";
 import { mapApiMessageToResponse, mapApiTicketToUi } from "@/lib/ticket-mappers";
 import { formatFaDate, formatFaDateTime, formatFaTime, parseServerDate } from "@/lib/datetime";
 
@@ -205,23 +205,21 @@ export function ClientDashboard({
     }
   };
 
-  // Ensure ticket responses/messages are loaded when viewing details.
-  // This is required so technician replies show up for the client.
+  // Ensure ticket details and messages are loaded when viewing (works with cookie or token auth).
   useEffect(() => {
-    if (!viewDialogOpen || !selectedTicket?.id || !authToken) return;
+    if (!viewDialogOpen || !selectedTicket?.id) return;
 
     let cancelled = false;
-    const loadMessages = async () => {
+    const loadTicketAndMessages = async () => {
       try {
         setMessagesLoading(true);
-        const messages = await apiRequest<ApiTicketMessageDto[]>(
-          `/api/tickets/${selectedTicket.id}/messages`,
-          { token: authToken, silent: true }
-        );
+        const [details, messages] = await Promise.all([
+          apiGetNoStore<ApiTicketResponse>(`/api/tickets/${selectedTicket.id}`, { token: authToken ?? undefined, silent: true }),
+          apiGetNoStore<ApiTicketMessageDto[]>(`/api/tickets/${selectedTicket.id}/messages`, { token: authToken ?? undefined, silent: true }),
+        ]);
         if (cancelled) return;
-        setSelectedTicket((prev) =>
-          prev ? { ...prev, responses: messages.map(mapApiMessageToResponse) } : prev
-        );
+        const mapped = mapApiTicketToUi(details, categoriesData, (messages ?? []).map(mapApiMessageToResponse));
+        setSelectedTicket(mapped);
       } catch (err) {
         // Non-fatal: allow details dialog without messages if endpoint fails
       } finally {
@@ -229,11 +227,11 @@ export function ClientDashboard({
       }
     };
 
-    void loadMessages();
+    void loadTicketAndMessages();
     return () => {
       cancelled = true;
     };
-  }, [viewDialogOpen, selectedTicket?.id, authToken]);
+  }, [viewDialogOpen, selectedTicket?.id, authToken, categoriesData]);
 
   const fetchTicketsForCard = async (key: string): Promise<Ticket[]> => {
     if (!authToken) {
@@ -252,7 +250,7 @@ export function ClientDashboard({
     const endpoint = params.toString()
       ? `/api/tickets?${params.toString()}`
       : "/api/tickets";
-    const apiTickets = await apiRequest<ApiTicketListItemResponse[]>(endpoint, { token: authToken });
+    const apiTickets = await apiGetNoStore<ApiTicketListItemResponse[]>(endpoint, { token: authToken });
     return apiTickets.map((apiTicket) => mapApiTicketToUi(apiTicket, categoriesData, []));
   };
 
@@ -954,57 +952,59 @@ export function ClientDashboard({
                 </div>
               )}
 
-              {/* Responses */}
+              {/* Responses / مکالمه (read-only) */}
               {messagesLoading && (!selectedTicket.responses || selectedTicket.responses.length === 0) ? (
                 <p className="text-sm text-muted-foreground text-right font-iran">
                   در حال بارگذاری پیام‌ها...
                 </p>
               ) : null}
-              {selectedTicket.responses &&
-                selectedTicket.responses.length > 0 && (
-                  <div>
-                    <h4 className="font-medium mb-4 flex items-center gap-2 font-iran">
-                      <MessageSquare className="w-4 h-4" />
-                      پاسخ‌ها و به‌روزرسانی‌ها
-                    </h4>
-                    <div className="space-y-4">
-                      {selectedTicket.responses.map((response, index) => (
-                        <div key={index} className="border rounded-lg p-4">
-                          <div className="flex justify-between items-start mb-2">
-                            <div className="flex items-center gap-2">
-                              <Avatar className="w-6 h-6">
-                                <AvatarFallback className="text-xs font-iran">
-                                  {response.authorName?.charAt(0) || "T"}
-                                </AvatarFallback>
-                              </Avatar>
-                              <span className="font-medium text-sm font-iran">
-                                {response.authorName ?? "—"}
-                              </span>
-                            </div>
-                            <div className="text-left">
-                              <Badge
-                                className={`${
-                                  getTicketStatusColor(response.status, "client")
-                                } mb-1 font-iran`}
-                              >
-                                {getTicketStatusLabel(response.status, "client")}
-                              </Badge>
-                              <p className="text-xs text-muted-foreground flex items-center gap-1 font-iran">
-                                <Calendar className="w-3 h-3" />
-                                {faDateTime(response.timestamp)}
-                              </p>
-                            </div>
+              {selectedTicket.responses && selectedTicket.responses.length > 0 && (
+                <div>
+                  <h4 className="font-medium mb-4 flex items-center gap-2 font-iran">
+                    <MessageSquare className="w-4 h-4" />
+                    مکالمه
+                  </h4>
+                  <p className="text-sm text-muted-foreground text-right font-iran mb-4">
+                    این بخش فقط برای مشاهده است. پاسخ‌دهی توسط واحد IT انجام می‌شود.
+                  </p>
+                  <div className="space-y-4">
+                    {selectedTicket.responses.map((response, index) => (
+                      <div key={response.id ?? index} className="border rounded-lg p-4">
+                        <div className="flex justify-between items-start mb-2">
+                          <div className="flex items-center gap-2">
+                            <Avatar className="w-6 h-6">
+                              <AvatarFallback className="text-xs font-iran">
+                                {response.authorName?.charAt(0) || "T"}
+                              </AvatarFallback>
+                            </Avatar>
+                            <span className="font-medium text-sm font-iran">
+                              {response.authorName ?? "—"}
+                            </span>
                           </div>
-                          <div className="bg-muted/50 p-3 rounded text-right">
-                            <p className="whitespace-pre-wrap font-iran">
-                              {response.message}
+                          <div className="text-left">
+                            <Badge
+                              className={`${
+                                getTicketStatusColor(response.status, "client")
+                              } mb-1 font-iran`}
+                            >
+                              {getTicketStatusLabel(response.status, "client")}
+                            </Badge>
+                            <p className="text-xs text-muted-foreground flex items-center gap-1 font-iran">
+                              <Calendar className="w-3 h-3" />
+                              {faDateTime(response.timestamp)}
                             </p>
                           </div>
                         </div>
-                      ))}
-                    </div>
+                        <div className="bg-muted/50 p-3 rounded text-right">
+                          <p className="whitespace-pre-wrap font-iran">
+                            {response.message}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                )}
+                </div>
+              )}
             </div>
           )}
         </DialogContent>

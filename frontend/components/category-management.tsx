@@ -220,7 +220,16 @@ export function CategoryManagement({
   };
 
   const handleCreateCategory = async () => {
-    if (!user || !newCategoryData.name.trim()) {
+    const trimmedName = newCategoryData.name?.trim() ?? "";
+    if (!user) {
+      toast({
+        title: "خطا",
+        description: "لطفاً وارد شوید",
+        variant: "destructive",
+      });
+      return;
+    }
+    if (!trimmedName) {
       toast({
         title: "خطا",
         description: "لطفاً نام دسته‌بندی را وارد کنید",
@@ -229,9 +238,15 @@ export function CategoryManagement({
       return;
     }
 
+    const payload = {
+      name: trimmedName,
+      description: newCategoryData.description?.trim() ?? "",
+      isActive: newCategoryData.isActive ?? true,
+    };
+
     try {
-      console.log("[CategoryManagement] Creating category:", newCategoryData);
-      const createdCategory = await createCategory(token, newCategoryData);
+      console.log("[CategoryManagement] Creating category:", payload);
+      const createdCategory = await createCategory(token, payload);
       console.log("[CategoryManagement] Category created successfully:", createdCategory);
       
       // Verify we got a valid response with an ID

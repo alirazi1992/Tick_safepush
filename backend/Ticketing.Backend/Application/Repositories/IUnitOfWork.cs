@@ -1,3 +1,5 @@
+using Microsoft.EntityFrameworkCore.Storage;
+
 namespace Ticketing.Backend.Application.Repositories;
 
 /// <summary>
@@ -6,6 +8,10 @@ namespace Ticketing.Backend.Application.Repositories;
 /// </summary>
 public interface IUnitOfWork
 {
+    /// <summary>Starts a database transaction. Use to make GetNextCategoryId + Add + SaveChanges atomic.</summary>
+    Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);
+    /// <summary>Runs the given action inside a transaction and the execution strategy (required when using SqlServerRetryingExecutionStrategy).</summary>
+    Task ExecuteInTransactionAsync(Func<Task> action, CancellationToken cancellationToken = default);
     ICategoryFieldDefinitionRepository CategoryFieldDefinitions { get; }
     IFieldDefinitionRepository FieldDefinitions { get; }
     ITicketTechnicianAssignmentRepository TicketTechnicianAssignments { get; }

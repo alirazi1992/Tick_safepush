@@ -462,7 +462,7 @@ public static class SeedData
 
     private static string NormalizeName(string name)
     {
-        return name.Trim().ToUpperInvariant();
+        return name.Trim().ToLowerInvariant();
     }
 
     /// <summary>

@@ -46,11 +46,11 @@ public class SystemSettingsService : ISystemSettingsService
             await _repository.AddAsync(settings);
         }
 
-        // Update properties
+        // Update properties (system is Farsi-only: always store fa)
         settings.AppName = request.AppName;
         settings.SupportEmail = request.SupportEmail;
         settings.SupportPhone = request.SupportPhone;
-        settings.DefaultLanguage = request.DefaultLanguage;
+        settings.DefaultLanguage = "fa";
         settings.DefaultTheme = request.DefaultTheme;
         settings.Timezone = request.Timezone;
 
@@ -105,7 +105,7 @@ public class SystemSettingsService : ISystemSettingsService
             AppName = settings.AppName,
             SupportEmail = settings.SupportEmail,
             SupportPhone = settings.SupportPhone,
-            DefaultLanguage = settings.DefaultLanguage,
+            DefaultLanguage = "fa",
             DefaultTheme = settings.DefaultTheme,
             Timezone = settings.Timezone,
 

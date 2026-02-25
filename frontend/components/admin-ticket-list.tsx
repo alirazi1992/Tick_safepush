@@ -2,7 +2,7 @@
 
 import React from "react"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -15,7 +15,6 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Checkbox } from "@/components/ui/checkbox"
 import { toast } from "@/hooks/use-toast"
-import { AssignedTechniciansCell } from "@/components/assigned-technicians-cell"
 import {
   Search,
   Filter,
@@ -34,6 +33,7 @@ import {
   Paperclip,
   Settings,
   Mail,
+  ChevronDown,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import {
@@ -44,7 +44,7 @@ import {
   statusForUi,
   type TicketStatus,
 } from "@/lib/ticket-status"
-import { apiRequest } from "@/lib/api-client"
+import { apiRequest, apiGetNoStore } from "@/lib/api-client"
 import {
   autoAssignAdminTicket,
   getAdminTechnicianDirectory,
@@ -237,6 +237,13 @@ export function AdminTicketList({ tickets, onTicketUpdate, authToken }: AdminTic
   const [selectedTechnicians, setSelectedTechnicians] = useState<string[]>([])
   const [autoAssigning, setAutoAssigning] = useState<Record<string, boolean>>({})
 
+  const [techListOpen, setTechListOpen] = useState(false)
+  const [techListTicketId, setTechListTicketId] = useState<string | null>(null)
+  const [techList, setTechList] = useState<AssignedTechnicianItem[]>([])
+
+  // Prevent preview modal from closing right after reply/status mutation (Radix may fire onOpenChange(false) when focus moves to toast)
+  const previewCloseGuardUntilRef = useRef(0)
+
   // Filter tickets: use statusForUi so dropdown (API enum values) matches API response
   const filteredTickets = tickets.filter((ticket) => {
     const matchesSearch =
@@ -308,12 +315,24 @@ export function AdminTicketList({ tickets, onTicketUpdate, authToken }: AdminTic
     setViewDialogOpen(true)
   }
 
+  const getTechRoleLabel = (tech: AssignedTechnicianItem) => {
+    if (tech.isSupervisor || tech.role === "SupervisorTechnician") return "سرپرست"
+    if (tech.role === "Technician") return "تکنسین"
+    return tech.role || "تکنسین"
+  }
+
+  const openTechListDialog = (ticket: any) => {
+    const list = normalizeAssignedTechnicians(ticket)
+    setTechListTicketId(ticket.id)
+    setTechList(list)
+    setTechListOpen(true)
+  }
+
   // Fetch full conversation when preview dialog opens (cookie or token auth)
   useEffect(() => {
     if (!viewDialogOpen || !selectedTicket?.id) return
     setPreviewMessagesLoading(true)
-    apiRequest<ApiTicketMessageDto[]>(`/api/tickets/${selectedTicket.id}/messages`, {
-      method: "GET",
+    apiGetNoStore<ApiTicketMessageDto[]>(`/api/tickets/${selectedTicket.id}/messages`, {
       token: authToken ?? undefined,
     })
       .then((list) => setPreviewMessages(list ?? []))
@@ -360,12 +379,13 @@ export function AdminTicketList({ tickets, onTicketUpdate, authToken }: AdminTic
           : "تکنسین جدیدی برای تخصیص یافت نشد.",
       })
     } catch (error: any) {
-      const message = error?.body?.message || error?.message || "خطا در تخصیص خودکار"
+      const status = error?.status ?? (error as any)?.status;
+      const message = error?.body?.message || error?.message || "خطا در تخصیص خودکار";
       toast({
         title: "تخصیص ناموفق بود",
-        description: message,
+        description: status ? `(${status}) ${message}` : message,
         variant: "destructive",
-      })
+      });
     } finally {
       setAutoAssigning((prev) => ({ ...prev, [ticket.id]: false }))
     }
@@ -411,10 +431,32 @@ export function AdminTicketList({ tickets, onTicketUpdate, authToken }: AdminTic
       })
       setAssignDialogOpen(false)
     } catch (error: any) {
-      const message = error?.body?.message || error?.message || "خطا در تخصیص دستی"
-      setAssignError(message)
+      const status = error?.status ?? (error as any)?.status;
+      const message = error?.body?.message || error?.message || "خطا در تخصیص دستی";
+      setAssignError(status ? `(${status}) ${message}` : message);
     } finally {
       setAssignLoading(false)
+    }
+  }
+
+  // Refetch ticket details + messages and update modal state. Do NOT close the preview modal after this.
+  // We do NOT call onTicketUpdate here: the parent would run loadTickets(activeTab) which sets loading=true,
+  // replacing the table with a loading div and unmounting this component (and thus closing the modal).
+  const reloadPreviewTicketAndMessages = async () => {
+    if (!selectedTicket?.id) return
+    try {
+      const [refreshed, list] = await Promise.all([
+        apiGetNoStore<Record<string, unknown>>(`/api/tickets/${selectedTicket.id}`, { token: authToken ?? undefined }),
+        apiGetNoStore<ApiTicketMessageDto[]>(`/api/tickets/${selectedTicket.id}/messages`, { token: authToken ?? undefined }),
+      ])
+      const newStatus = (refreshed?.displayStatus ?? refreshed?.status ?? selectedTicket?.status) as TicketStatus
+      setSelectedTicket((prev: any) =>
+        prev ? { ...prev, displayStatus: newStatus, status: newStatus, updatedAt: refreshed?.updatedAt ?? prev.updatedAt } : prev
+      )
+      setPreviewMessages(list ?? [])
+      previewCloseGuardUntilRef.current = Date.now() + 600
+    } catch (err) {
+      // non-fatal: modal stays open with previous data
     }
   }
 
@@ -440,34 +482,22 @@ export function AdminTicketList({ tickets, onTicketUpdate, authToken }: AdminTic
           status: mapUiStatusToApi(replyStatus),
         },
       })
-      // Re-fetch ticket so UI shows updated status immediately
-      const refreshed = await apiRequest<Record<string, unknown>>(`/api/tickets/${selectedTicket.id}`, {
-        method: "GET",
-        token: authToken ?? undefined,
-      })
-      const newStatus = (refreshed?.displayStatus ?? refreshed?.status ?? replyStatus) as TicketStatus
-      onTicketUpdate(selectedTicket.id, { displayStatus: newStatus, status: newStatus })
-      setSelectedTicket((prev: any) =>
-        prev ? { ...prev, displayStatus: newStatus, status: newStatus, updatedAt: refreshed?.updatedAt ?? new Date().toISOString() } : prev
-      )
       setReplyMessage("")
-      const list = await apiRequest<ApiTicketMessageDto[]>(`/api/tickets/${selectedTicket.id}/messages`, {
-        method: "GET",
-        token: authToken ?? undefined,
-      })
-      setPreviewMessages(list ?? [])
+      await reloadPreviewTicketAndMessages()
       toast({
         title: "پاسخ ارسال شد",
         description: "پاسخ و وضعیت با موفقیت ثبت شد.",
       })
     } catch (error: any) {
-      const body = error?.body && typeof error.body === "object" ? (error.body as Record<string, unknown>) : null
-      const message = body?.message ?? body?.detail ?? error?.message ?? "لطفاً دوباره تلاش کنید."
+      const status = error?.status ?? (error as any)?.status;
+      const body = error?.body && typeof error.body === "object" ? (error.body as Record<string, unknown>) : null;
+      const message = body?.message ?? body?.detail ?? error?.message ?? "لطفاً دوباره تلاش کنید.";
+      const desc = status ? `(${status}) ${String(message)}` : String(message);
       toast({
         title: "ارسال پاسخ ناموفق بود",
-        description: String(message),
+        description: desc,
         variant: "destructive",
-      })
+      });
     } finally {
       setReplySubmitting(false)
     }
@@ -490,26 +520,19 @@ export function AdminTicketList({ tickets, onTicketUpdate, authToken }: AdminTic
         token: authToken ?? undefined,
         body: { status: mapUiStatusToApi(replyStatus) },
       })
-      // Re-fetch ticket so UI shows updated status immediately
-      const updated = await apiRequest<Record<string, unknown>>(`/api/tickets/${selectedTicket.id}`, {
-        method: "GET",
-        token: authToken ?? undefined,
-      })
-      const newStatus = (updated?.displayStatus ?? updated?.status ?? replyStatus) as TicketStatus
-      onTicketUpdate(selectedTicket.id, { displayStatus: newStatus, status: newStatus })
-      setSelectedTicket((prev: any) =>
-        prev ? { ...prev, displayStatus: newStatus, status: newStatus, updatedAt: updated?.updatedAt ?? new Date().toISOString() } : prev
-      )
+      await reloadPreviewTicketAndMessages()
       toast({
         title: "وضعیت ثبت شد",
         description: "وضعیت تیکت با موفقیت به‌روزرسانی شد.",
       })
     } catch (error: any) {
+      const status = error?.status ?? (error as any)?.status
       const body = error?.body && typeof error.body === "object" ? (error.body as Record<string, unknown>) : null
       const message = body?.message ?? body?.detail ?? error?.message ?? "لطفاً دوباره تلاش کنید."
+      const desc = status ? `(${status}) ${String(message)}` : String(message)
       toast({
         title: "ثبت وضعیت ناموفق بود",
-        description: String(message),
+        description: desc,
         variant: "destructive",
       })
     }
@@ -923,11 +946,19 @@ export function AdminTicketList({ tickets, onTicketUpdate, authToken }: AdminTic
                             </div>
                           </div>
                         </TableCell>
-                        <TableCell>
-                          <AssignedTechniciansCell
-                            technicians={assignedTechnicians}
-                            emptyLabel="بدون تکنسین"
-                          />
+                        <TableCell onClick={(e) => e.stopPropagation()}>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="gap-1 font-iran"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              openTechListDialog(ticket)
+                            }}
+                          >
+                            مشاهده ({assignedTechnicians.length})
+                            <ChevronDown className="h-3 w-3" />
+                          </Button>
                         </TableCell>
                         <TableCell className="text-sm font-iran">
                           {formatSafeDate(ticket.createdAt)}
@@ -990,8 +1021,23 @@ export function AdminTicketList({ tickets, onTicketUpdate, authToken }: AdminTic
         </CardContent>
       </Card>
 
-      {/* Enhanced View Ticket Dialog */}
-      <Dialog open={viewDialogOpen} onOpenChange={setViewDialogOpen}>
+      {/* Enhanced View Ticket Dialog — stays open after reply/status/assign; close only via X or overlay */}
+      <Dialog
+        open={viewDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            if (Date.now() < previewCloseGuardUntilRef.current) return
+            if (selectedTicket) {
+              const status = statusForUi(selectedTicket)
+              if (status) {
+                onTicketUpdate(selectedTicket.id, { displayStatus: status, status })
+              }
+            }
+            setSelectedTicket(null)
+          }
+          setViewDialogOpen(open)
+        }}
+      >
         <DialogContent className="max-h-[85vh] overflow-y-auto w-[95vw] sm:w-[90vw] md:max-w-6xl font-iran" dir="rtl">
           <DialogHeader>
             <DialogTitle className="text-right font-iran text-xl">پیش‌نمایش تیکت {selectedTicket?.id}</DialogTitle>
@@ -1415,6 +1461,40 @@ export function AdminTicketList({ tickets, onTicketUpdate, authToken }: AdminTic
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={techListOpen} onOpenChange={setTechListOpen}>
+        <DialogContent className="max-w-md font-iran text-right" dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="text-right font-iran">تکنسین‌های این تیکت</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            {techList.length === 0 ? (
+              <p className="text-muted-foreground text-sm py-4 text-center font-iran">
+                برای این تیکت تکنسینی ثبت نشده است
+              </p>
+            ) : (
+              <ul className="space-y-3 max-h-[60vh] overflow-y-auto">
+                {techList.map((tech, index) => {
+                  const displayName = tech.fullName || tech.name || "نامشخص"
+                  const roleLabel = getTechRoleLabel(tech)
+                  const key = tech.id || tech.userId || `${displayName}-${index}`
+                  return (
+                    <li key={key} className="flex items-center justify-between gap-3 border rounded-lg p-3">
+                      <div className="flex flex-col text-right">
+                        <span className="text-sm font-medium font-iran">{displayName}</span>
+                        <span className="text-xs text-muted-foreground font-iran">{roleLabel}</span>
+                      </div>
+                      <Badge variant="outline" className="text-xs font-iran">
+                        {roleLabel}
+                      </Badge>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
 

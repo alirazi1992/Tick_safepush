@@ -195,7 +195,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error("Login error:", error);
       // Check if it's a network error (backend not running)
       if (error?.message?.includes("fetch") || error?.message?.includes("Failed to fetch")) {
-        console.error("Backend may not be running. Check if the API server is running on http://localhost:5000");
+        console.error("Backend may not be running. Check if the API server is running on http://localhost:8080");
       }
       // Return the error message so the UI can display it
       throw error;

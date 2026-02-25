@@ -1,4 +1,4 @@
-import { apiRequest } from "./api-client"
+import { apiRequest, apiGetNoStore } from "./api-client"
 import { apiFetch } from "./api"
 import type {
   ApiSupervisorTechnicianWorkloadDto,
@@ -61,8 +61,7 @@ export async function getSupervisorTechnicianSummary(
 export async function getSupervisorAvailableTickets(
   token: string
 ): Promise<ApiSupervisorTicketSummaryDto[]> {
-  return apiRequest<ApiSupervisorTicketSummaryDto[]>("/api/supervisor/tickets/available-to-assign", {
-    method: "GET",
+  return apiGetNoStore<ApiSupervisorTicketSummaryDto[]>("/api/supervisor/tickets/available-to-assign", {
     token,
   })
 }

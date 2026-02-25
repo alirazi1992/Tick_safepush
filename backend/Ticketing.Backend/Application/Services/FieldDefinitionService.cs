@@ -133,8 +133,14 @@ public class FieldDefinitionService : IFieldDefinitionService
         _logger.LogDebug("Creating field: Name={Name}, FieldKey={FieldKey}, IsRequired={IsRequired}, Type={Type}", 
             field.Name, field.FieldKey, field.IsRequired, field.Type);
 
-        await _unitOfWork.FieldDefinitions.AddAsync(field);
-        await _unitOfWork.SaveChangesAsync();
+        // SubcategoryFieldDefinitions.Id is not IDENTITY on SQL Server; set Id in a transaction.
+        await _unitOfWork.ExecuteInTransactionAsync(async () =>
+        {
+            var nextId = await _unitOfWork.FieldDefinitions.GetNextSubcategoryFieldDefinitionIdAsync();
+            field.Id = nextId;
+            await _unitOfWork.FieldDefinitions.AddAsync(field);
+            await _unitOfWork.SaveChangesAsync();
+        });
 
         _logger.LogInformation("Created field definition {FieldId} for subcategory {SubcategoryId}", field.Id, subcategoryId);
 
@@ -188,36 +194,42 @@ public class FieldDefinitionService : IFieldDefinitionService
             CreatedAt = DateTime.UtcNow
         };
 
-        await _unitOfWork.CategoryFieldDefinitions.AddAsync(template);
-
         var subcategories = await _categoryRepository.GetSubcategoriesByCategoryIdAsync(categoryId);
-        foreach (var sub in subcategories)
+
+        // Category + SubcategoryFieldDefinitions in one transaction; set Id for each subcategory field (SQL Server has no IDENTITY).
+        await _unitOfWork.ExecuteInTransactionAsync(async () =>
         {
-            if (await _unitOfWork.FieldDefinitions.ExistsAsync(sub.Id, request.Key))
+            await _unitOfWork.CategoryFieldDefinitions.AddAsync(template);
+            var nextId = await _unitOfWork.FieldDefinitions.GetNextSubcategoryFieldDefinitionIdAsync();
+            foreach (var sub in subcategories)
             {
-                throw new InvalidOperationException($"A field with key '{request.Key}' already exists for subcategory '{sub.Name}'.");
+                if (await _unitOfWork.FieldDefinitions.ExistsAsync(sub.Id, request.Key))
+                {
+                    throw new InvalidOperationException($"A field with key '{request.Key}' already exists for subcategory '{sub.Name}'.");
+                }
+
+                var subField = new SubcategoryFieldDefinition
+                {
+                    Id = nextId++,
+                    SubcategoryId = sub.Id,
+                    Name = request.Name,
+                    Label = request.Label,
+                    FieldKey = request.Key,
+                    Type = fieldType,
+                    IsRequired = request.IsRequired,
+                    DefaultValue = request.DefaultValue,
+                    OptionsJson = template.OptionsJson,
+                    Min = request.Min,
+                    Max = request.Max,
+                    SortOrder = template.SortOrder,
+                    IsActive = true,
+                    CreatedAt = DateTime.UtcNow
+                };
+                await _unitOfWork.FieldDefinitions.AddAsync(subField);
             }
+            await _unitOfWork.SaveChangesAsync();
+        });
 
-            var subField = new SubcategoryFieldDefinition
-            {
-                SubcategoryId = sub.Id,
-                Name = request.Name,
-                Label = request.Label,
-                FieldKey = request.Key,
-                Type = fieldType,
-                IsRequired = request.IsRequired,
-                DefaultValue = request.DefaultValue,
-                OptionsJson = template.OptionsJson,
-                Min = request.Min,
-                Max = request.Max,
-                SortOrder = template.SortOrder,
-                IsActive = true,
-                CreatedAt = DateTime.UtcNow
-            };
-            await _unitOfWork.FieldDefinitions.AddAsync(subField);
-        }
-
-        await _unitOfWork.SaveChangesAsync();
         return MapCategoryToResponse(template);
     }
 

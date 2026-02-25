@@ -93,13 +93,13 @@ public class CategoryRepository : ICategoryRepository
 
     public async Task<bool> ExistsByNameAsync(string name)
     {
-        var normalized = name.Trim().ToUpperInvariant();
+        var normalized = name.Trim().ToLowerInvariant();
         return await _context.Categories.AnyAsync(c => c.NormalizedName == normalized);
     }
 
     public async Task<bool> ExistsByNameExcludingIdAsync(string name, int excludeId)
     {
-        var normalized = name.Trim().ToUpperInvariant();
+        var normalized = name.Trim().ToLowerInvariant();
         return await _context.Categories.AnyAsync(c => c.NormalizedName == normalized && c.Id != excludeId);
     }
 
@@ -119,6 +119,18 @@ public class CategoryRepository : ICategoryRepository
             .Where(s => s.CategoryId == categoryId)
             .OrderBy(s => s.Name)
             .ToListAsync();
+    }
+
+    public async Task<int> GetNextCategoryIdAsync()
+    {
+        var max = await _context.Categories.MaxAsync(c => (int?)c.Id);
+        return (max ?? 0) + 1;
+    }
+
+    public async Task<int> GetNextSubcategoryIdAsync()
+    {
+        var max = await _context.Subcategories.MaxAsync(s => (int?)s.Id);
+        return (max ?? 0) + 1;
     }
 
     public async Task<Category> AddAsync(Category category)

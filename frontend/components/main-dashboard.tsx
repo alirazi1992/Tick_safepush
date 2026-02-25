@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import {
   FolderTree,
   LayoutDashboard,
@@ -11,7 +11,7 @@ import {
   UserPlus,
 } from "lucide-react";
 
-import { apiRequest } from "@/lib/api-client";
+import { apiRequest, apiGetNoStore } from "@/lib/api-client";
 import type {
   ApiCategoryResponse,
   ApiTicketListItemResponse,
@@ -52,6 +52,7 @@ import { parseServerDate, toFaDateTime } from "@/lib/datetime";
 export function MainDashboard() {
   const { user, token, isLoading } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
 
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [technicians, setTechnicians] = useState<TechnicianProfile[]>([]);
@@ -112,7 +113,7 @@ export function MainDashboard() {
       const endpoint = userRole === "technician" ? "/api/technician/tickets" : "/api/tickets";
       console.log(`[loadTickets] Fetching from ${endpoint} for role ${userRole}`);
       
-      const apiTickets = await apiRequest<ApiTicketListItemResponse[]>(endpoint, {
+      const apiTickets = await apiGetNoStore<ApiTicketListItemResponse[]>(endpoint, {
         token: authToken,
       });
 
@@ -452,6 +453,30 @@ export function MainDashboard() {
     await loadTickets(token, categoriesRef.current, user?.role);
   };
 
+  // Refetch tickets when returning to dashboard (pathname) or when page becomes visible (e.g. back button, tab focus)
+  useEffect(() => {
+    if (!user || !token) return;
+    const isDashboardPath =
+      pathname === "/admin" ||
+      pathname === "/client" ||
+      pathname === "/technician" ||
+      pathname === "/supervisor";
+    if (isDashboardPath) {
+      refreshTickets();
+    }
+  }, [pathname, user?.id, token]);
+
+  useEffect(() => {
+    if (!user) return;
+    const handleVisibility = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        refreshTickets();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, [user?.id, token]);
+
   const handleTicketUpdate = async (
     ticketId: string,
     updates: Partial<Ticket>
@@ -564,10 +589,8 @@ export function MainDashboard() {
       );
 
       const [ticketDetails, messages] = await Promise.all([
-        apiRequest<ApiTicketResponse>(`/api/tickets/${ticketId}`, { token }),
-        apiRequest<ApiTicketMessageDto[]>(`/api/tickets/${ticketId}/messages`, {
-          token,
-        }),
+        apiGetNoStore<ApiTicketResponse>(`/api/tickets/${ticketId}`, { token }),
+        apiGetNoStore<ApiTicketMessageDto[]>(`/api/tickets/${ticketId}/messages`, { token }),
       ]);
 
       const mapped = mapApiTicketToUi(
@@ -645,12 +668,14 @@ export function MainDashboard() {
     if (token && user?.role === "admin") {
       for (const [key, category] of Object.entries(updatedCategories)) {
         if (typeof category.backendId === "undefined") {
+          const name = (category.label ?? category.id ?? key)?.toString?.()?.trim() ?? "";
+          if (!name) continue; // never POST with empty name
           try {
             const created = await apiRequest<ApiCategoryResponse>("/api/categories", {
               method: "POST",
               token,
               body: {
-                name: category.label ?? category.id ?? key,
+                name,
                 description: category.description ?? category.label ?? "",
               },
             });
@@ -931,6 +956,7 @@ export function MainDashboard() {
         <AdminDashboard
           tickets={tickets}
           onTicketUpdate={handleTicketUpdate}
+          onRefreshTickets={refreshTickets}
           technicians={technicians}
           categoriesData={categoriesData}
           onCategoryUpdate={handleCategoryUpdate}

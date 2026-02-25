@@ -63,6 +63,7 @@ export function TechnicianManagement() {
   const [selectedTechnician, setSelectedTechnician] = useState<ApiTechnicianResponse | null>(null)
   const [technicianToDelete, setTechnicianToDelete] = useState<ApiTechnicianResponse | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [creating, setCreating] = useState(false)
 
   // Form state
   const [formData, setFormData] = useState({
@@ -345,6 +346,22 @@ export function TechnicianManagement() {
 
   const handleCreate = async () => {
     if (!user) return
+    if (!formData.fullName?.trim()) {
+      toast({
+        title: "خطا در ایجاد تکنسین",
+        description: "نام کامل الزامی است",
+        variant: "destructive",
+      })
+      return
+    }
+    if (!formData.email?.trim()) {
+      toast({
+        title: "خطا در ایجاد تکنسین",
+        description: "ایمیل الزامی است",
+        variant: "destructive",
+      })
+      return
+    }
     if (!formData.password || !formData.confirmPassword) {
       toast({
         title: "خطا در ایجاد تکنسین",
@@ -369,15 +386,17 @@ export function TechnicianManagement() {
       })
       return
     }
+    if (creating) return
+    setCreating(true)
     try {
       const coverage = buildCoverage(formData.subcategoryIds)
       await createTechnician(token, {
-        fullName: formData.fullName,
-        email: formData.email,
+        fullName: formData.fullName.trim(),
+        email: formData.email.trim(),
         password: formData.password,
         confirmPassword: formData.confirmPassword,
-        phone: formData.phone || null,
-        department: formData.department || null,
+        phone: formData.phone?.trim() || null,
+        department: formData.department?.trim() || null,
         isActive: formData.isActive,
         isSupervisor: formData.isSupervisor,
         role: formData.isSupervisor ? "SupervisorTechnician" : "Technician",
@@ -386,18 +405,33 @@ export function TechnicianManagement() {
       })
       toast({
         title: "تکنسین ایجاد شد",
-        description: "حساب کاربری تکنسین با موفقیت ایجاد شد",
+        description: "حساب کاربری تکنسین فعال است و در لیست نمایش داده می‌شود",
       })
       setCreateDialogOpen(false)
       resetForm()
-      await loadTechnicians()
+      setPage(1)
+      await loadTechnicians(1)
     } catch (error: any) {
       console.error("Failed to create technician:", error)
+      const body = error?.body
+      const message =
+        (typeof body?.message === "string" ? body.message : null) ||
+        error?.message ||
+        "لطفاً دوباره تلاش کنید"
+      const code = typeof body?.error === "string" ? body.error : null
+      const description = code === "EMAIL_EXISTS"
+        ? "این ایمیل قبلاً ثبت شده است. ایمیل دیگری وارد کنید."
+        : code === "PHONE_EXISTS"
+          ? "این شماره تلفن قبلاً ثبت شده است."
+          : message
       toast({
         title: "خطا در ایجاد تکنسین",
-        description: error?.message || "لطفاً دوباره تلاش کنید",
+        description,
         variant: "destructive",
+        duration: 6000,
       })
+    } finally {
+      setCreating(false)
     }
   }
 
@@ -987,9 +1021,9 @@ export function TechnicianManagement() {
             </Button>
             <Button
               onClick={handleCreate}
-              disabled={!canCreate}
+              disabled={!canCreate || creating}
             >
-              ایجاد تکنسین
+              {creating ? "در حال ایجاد..." : "ایجاد تکنسین"}
             </Button>
           </div>
         </DialogContent>

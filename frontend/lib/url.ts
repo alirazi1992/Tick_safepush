@@ -4,6 +4,7 @@
 
 /**
  * Default API base URL: only used in development/test (e.g. next dev, e2e). Production must set NEXT_PUBLIC_API_BASE_URL.
+ * Dev default matches tools/run-backend.ps1 (port 5000). For IIS (port 8080), set NEXT_PUBLIC_API_BASE_URL.
  */
 export function getDefaultApiBaseUrl(): string {
   const env = typeof process !== "undefined" ? process.env.NODE_ENV : undefined;

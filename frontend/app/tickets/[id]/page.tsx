@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { apiRequest } from "@/lib/api-client";
+import { apiRequest, apiGetNoStore } from "@/lib/api-client";
 import type { ApiTicketResponse, ApiTicketMessageDto } from "@/lib/api-types";
 import { mapApiTicketToUi, mapApiMessageToResponse, mapUiStatusToApi } from "@/lib/ticket-mappers";
 import { useCategories } from "@/services/useCategories";
@@ -121,8 +121,8 @@ export default function TicketDetailPage() {
 
     try {
       const [ticketDetails, messages] = await Promise.all([
-        apiRequest<ApiTicketResponse>(`/api/tickets/${ticketId}`, { token }),
-        apiRequest<ApiTicketMessageDto[]>(`/api/tickets/${ticketId}/messages`, { token }),
+        apiGetNoStore<ApiTicketResponse>(`/api/tickets/${ticketId}`, { token }),
+        apiGetNoStore<ApiTicketMessageDto[]>(`/api/tickets/${ticketId}/messages`, { token }),
       ]);
 
       const mapped = mapApiTicketToUi(ticketDetails, categories, messages.map(mapApiMessageToResponse));
@@ -260,10 +260,16 @@ export default function TicketDetailPage() {
         description: "تغییر وضعیت با موفقیت ثبت شد",
       });
       await loadTicket();
+      router.refresh();
     } catch (err: any) {
+      const status = err?.status ?? (err as any)?.status;
+      const msg = err?.message || "لطفا دوباره تلاش کنید";
+      if (process.env.NODE_ENV === "development" || (typeof window !== "undefined" && (window as any).__lastApiError)) {
+        console.error("[TicketDetail] Status update failed", { status, url: err?.url, message: msg });
+      }
       toast({
         title: "خطا در تغییر وضعیت",
-        description: err?.message || "لطفا دوباره تلاش کنید",
+        description: status ? `(${status}) ${msg}` : msg,
         variant: "destructive",
       });
     } finally {
@@ -289,10 +295,16 @@ export default function TicketDetailPage() {
       });
       setReplyMessage("");
       await loadTicket();
+      router.refresh();
     } catch (err: any) {
+      const status = err?.status ?? (err as any)?.status;
+      const msg = err?.message || "لطفا دوباره تلاش کنید";
+      if (process.env.NODE_ENV === "development" || (typeof window !== "undefined" && (window as any).__lastApiError)) {
+        console.error("[TicketDetail] Reply failed", { status, url: err?.url, message: msg });
+      }
       toast({
         title: "خطا در ارسال پاسخ",
-        description: err?.message || "لطفا دوباره تلاش کنید",
+        description: status ? `(${status}) ${msg}` : msg,
         variant: "destructive",
       });
     } finally {
@@ -306,15 +318,20 @@ export default function TicketDetailPage() {
       setClaimSubmitting(true);
       await claimTicket(token, ticketId);
       await loadTicket();
+      router.refresh();
       toast({
         title: "قبول مسئولیت انجام شد",
         description: "تیکت با موفقیت به شما واگذار شد.",
       });
     } catch (err: any) {
+      const status = err?.status ?? (err as any)?.status;
       const message = err?.body?.message || err?.message || "خطا در قبول مسئولیت";
+      if (process.env.NODE_ENV === "development") {
+        console.error("[TicketDetail] Claim failed", { status, message });
+      }
       toast({
         title: "قبول مسئولیت ناموفق بود",
-        description: message,
+        description: status ? `(${status}) ${message}` : message,
         variant: "destructive",
       });
     } finally {
@@ -339,10 +356,16 @@ export default function TicketDetailPage() {
         description: action === "grant" ? "دادن دسترسی همکاری انجام شد" : "لغو دسترسی انجام شد",
       });
       await loadTicket();
+      router.refresh();
     } catch (err: any) {
+      const status = err?.status ?? (err as any)?.status;
+      const msg = err?.body?.message || err?.message || "لطفا دوباره تلاش کنید";
+      if (process.env.NODE_ENV === "development") {
+        console.error("[TicketDetail] Collaborator update failed", { status, message: msg });
+      }
       toast({
         title: "خطا در بروزرسانی دسترسی",
-        description: err?.body?.message || err?.message || "لطفا دوباره تلاش کنید",
+        description: status ? `(${status}) ${msg}` : msg,
         variant: "destructive",
       });
     }

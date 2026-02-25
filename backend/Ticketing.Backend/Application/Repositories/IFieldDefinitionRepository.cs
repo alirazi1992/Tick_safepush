@@ -7,6 +7,8 @@ public interface IFieldDefinitionRepository
     Task<SubcategoryFieldDefinition?> GetByIdAsync(int id);
     Task<IEnumerable<SubcategoryFieldDefinition>> GetBySubcategoryIdAsync(int subcategoryId, bool includeInactive = true);
     Task<IEnumerable<SubcategoryFieldDefinition>> GetByCategoryIdAsync(int categoryId, bool includeInactive = true);
+    /// <summary>Returns the next available Id for a new SubcategoryFieldDefinition (max+1). Use inside a transaction to avoid races.</summary>
+    Task<int> GetNextSubcategoryFieldDefinitionIdAsync();
     Task<SubcategoryFieldDefinition> AddAsync(SubcategoryFieldDefinition fieldDefinition);
     Task<SubcategoryFieldDefinition> UpdateAsync(SubcategoryFieldDefinition fieldDefinition);
     Task<bool> DeleteAsync(int id);

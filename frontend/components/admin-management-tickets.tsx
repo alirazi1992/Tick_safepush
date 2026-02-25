@@ -37,6 +37,7 @@ import { parseServerDate, toFaDate, toFaDateTime } from "@/lib/datetime"
 interface AdminManagementTicketsProps {
   authToken?: string | null
   tickets?: Ticket[]
+  onRefreshTickets?: () => void | Promise<void>
 }
 
 type TabKey = "recent" | "archive"
@@ -45,7 +46,7 @@ const formatDate = (value?: string | null) => toFaDate(value)
 
 const formatDateTime = (value?: string | null) => toFaDateTime(value)
 
-export function AdminManagementTickets({ authToken, tickets }: AdminManagementTicketsProps) {
+export function AdminManagementTickets({ authToken, tickets, onRefreshTickets }: AdminManagementTicketsProps) {
   const [activeTab, setActiveTab] = useState<TabKey>("recent")
   const [recentTickets, setRecentTickets] = useState<Ticket[]>([])
   const [archiveTickets, setArchiveTickets] = useState<ApiAdminTicketListItemDto[]>([])
@@ -214,6 +215,8 @@ export function AdminManagementTickets({ authToken, tickets }: AdminManagementTi
       setRecentTickets((prev) =>
         prev.map((ticket) => (ticket.id === ticketId ? { ...ticket, ...updates } : ticket))
       )
+      await loadTickets(activeTab)
+      await onRefreshTickets?.()
       return
     }
     const payload: Record<string, unknown> = {}
@@ -229,6 +232,8 @@ export function AdminManagementTickets({ authToken, tickets }: AdminManagementTi
     setRecentTickets((prev) =>
       prev.map((ticket) => (ticket.id === ticketId ? { ...ticket, ...updates } : ticket))
     )
+    await loadTickets(activeTab)
+    await onRefreshTickets?.()
   }
 
   return (

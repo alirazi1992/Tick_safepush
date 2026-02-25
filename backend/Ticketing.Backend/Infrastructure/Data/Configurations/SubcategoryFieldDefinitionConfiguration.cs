@@ -11,7 +11,8 @@ public class SubcategoryFieldDefinitionConfiguration : IEntityTypeConfiguration<
         builder.ToTable("SubcategoryFieldDefinitions");
         
         builder.HasKey(f => f.Id);
-        builder.Property(f => f.Id).ValueGeneratedOnAdd();
+        // SQL Server TikQ.dbo.SubcategoryFieldDefinitions.Id is not IDENTITY; we set Id in code.
+        builder.Property(f => f.Id).ValueGeneratedNever();
         
         builder.Property(f => f.SubcategoryId).IsRequired();
         builder.Property(f => f.Name).IsRequired().HasMaxLength(200);

@@ -1235,8 +1235,9 @@ public class TicketService : ITicketService
                 };
                 ticket.FieldValues.Add(ticketFieldValue);
             }
-            
-            await _ticketRepository.UpdateAsync(ticket);
+
+            // Do not call UpdateAsync(ticket): we only added children; the ticket row is unchanged.
+            // Marking the ticket Modified caused an UPDATE that affected 0 rows (concurrency exception).
             await _unitOfWork.SaveChangesAsync();
         }
 

@@ -63,15 +63,13 @@ public class UserPreferencesService : IUserPreferencesService
             await _unitOfWork.SaveChangesAsync();
         }
 
-        // Derive direction from language
-        var direction = preferences.Language == "fa" ? "rtl" : "ltr";
-
+        // System is Farsi-only: always return fa and rtl
         return new UserPreferencesResponse
         {
             Theme = preferences.Theme,
             FontSize = preferences.FontSize,
-            Language = preferences.Language,
-            Direction = direction,
+            Language = "fa",
+            Direction = "rtl",
             Timezone = preferences.Timezone ?? "Asia/Tehran",
             Notifications = new NotificationPreferencesResponse
             {
@@ -89,14 +87,14 @@ public class UserPreferencesService : IUserPreferencesService
 
         if (preferences == null)
         {
-            // Create new preferences with notification defaults
+            // Create new preferences with notification defaults (system is Farsi-only)
             preferences = new UserPreferences
             {
                 Id = Guid.NewGuid(),
                 UserId = userId,
                 Theme = request.Theme,
                 FontSize = request.FontSize,
-                Language = request.Language,
+                Language = "fa",
                 Timezone = request.Timezone,
                 EmailEnabled = true,
                 PushEnabled = true,
@@ -109,10 +107,10 @@ public class UserPreferencesService : IUserPreferencesService
         }
         else
         {
-            // Update existing preferences
+            // Update existing preferences (system is Farsi-only: always store fa)
             preferences.Theme = request.Theme;
             preferences.FontSize = request.FontSize;
-            preferences.Language = request.Language;
+            preferences.Language = "fa";
             preferences.Timezone = request.Timezone;
             preferences.UpdatedAt = DateTime.UtcNow;
             await _repository.UpdateAsync(preferences);
@@ -120,15 +118,13 @@ public class UserPreferencesService : IUserPreferencesService
 
         await _unitOfWork.SaveChangesAsync();
 
-        // Derive direction from language
-        var direction = preferences.Language == "fa" ? "rtl" : "ltr";
-
+        // System is Farsi-only: always return fa and rtl
         return new UserPreferencesResponse
         {
             Theme = preferences.Theme,
             FontSize = preferences.FontSize,
-            Language = preferences.Language,
-            Direction = direction,
+            Language = "fa",
+            Direction = "rtl",
             Timezone = preferences.Timezone ?? "Asia/Tehran",
             Notifications = new NotificationPreferencesResponse
             {

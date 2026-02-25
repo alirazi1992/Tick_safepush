@@ -18,6 +18,10 @@ public interface ICategoryRepository
     Task<bool> SubcategoryExistsByNameAsync(int categoryId, string name);
     Task<bool> SubcategoryExistsByNameExcludingIdAsync(int categoryId, string name, int excludeId);
     Task<IEnumerable<Subcategory>> GetSubcategoriesByCategoryIdAsync(int categoryId);
+    /// <summary>Returns the next available Id for a new category (max+1). Use inside a transaction to avoid races.</summary>
+    Task<int> GetNextCategoryIdAsync();
+    /// <summary>Returns the next available Id for a new subcategory (max+1). Use inside a transaction to avoid races.</summary>
+    Task<int> GetNextSubcategoryIdAsync();
     Task<Category> AddAsync(Category category);
     Task<Subcategory> AddSubcategoryAsync(Subcategory subcategory);
     Task UpdateAsync(Category category);

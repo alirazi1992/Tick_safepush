@@ -88,9 +88,9 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
         body.classList.add("text-base")
       }
 
-      // Apply language and direction
-      html.setAttribute("lang", prefs.language)
-      html.setAttribute("dir", prefs.direction || (prefs.language === "fa" ? "rtl" : "ltr"))
+      // Apply language and direction (system is Farsi-only)
+      html.setAttribute("lang", "fa")
+      html.setAttribute("dir", "rtl")
     },
     [setNextTheme, mounted, resolvedTheme]
   )

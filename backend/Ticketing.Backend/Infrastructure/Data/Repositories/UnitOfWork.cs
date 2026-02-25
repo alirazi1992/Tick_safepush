@@ -1,3 +1,5 @@
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Ticketing.Backend.Application.Repositories;
 using Ticketing.Backend.Infrastructure.Data;
 
@@ -17,6 +19,35 @@ public class UnitOfWork : IUnitOfWork
     public UnitOfWork(AppDbContext context)
     {
         _context = context;
+    }
+
+    public Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default)
+    {
+        return _context.Database.BeginTransactionAsync(cancellationToken);
+    }
+
+    public async Task ExecuteInTransactionAsync(Func<Task> action, CancellationToken cancellationToken = default)
+    {
+        var strategy = _context.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(
+            action,
+            async (dbContext, state, ct) =>
+            {
+                await using var transaction = await dbContext.Database.BeginTransactionAsync(ct);
+                try
+                {
+                    await state();
+                    await transaction.CommitAsync(ct);
+                }
+                catch
+                {
+                    await transaction.RollbackAsync(ct);
+                    throw;
+                }
+                return true;
+            },
+            null,
+            cancellationToken);
     }
 
     public ICategoryFieldDefinitionRepository CategoryFieldDefinitions

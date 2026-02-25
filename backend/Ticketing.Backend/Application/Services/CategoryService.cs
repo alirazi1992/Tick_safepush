@@ -93,20 +93,21 @@ public class CategoryService : ICategoryService
             }).ToList() ?? new List<Subcategory>()
         };
 
-        _logger?.LogInformation("CategoryService.CreateAsync: Adding to repository - Name={Name}", category.Name);
-        await _repository.AddAsync(category);
-        
-        _logger?.LogInformation("CategoryService.CreateAsync: Calling SaveChangesAsync");
-        var savedCount = await _unitOfWork.SaveChangesAsync();
+        // When Categories.Id is not IDENTITY, we set Id explicitly. Use a transaction inside the execution strategy
+        // so it works with SqlServerRetryingExecutionStrategy (EnableRetryOnFailure).
+        int savedCount = 0;
+        await _unitOfWork.ExecuteInTransactionAsync(async () =>
+        {
+            var nextId = await _repository.GetNextCategoryIdAsync();
+            category.Id = nextId;
+            _logger?.LogInformation("CategoryService.CreateAsync: Adding to repository - Id={Id}, Name={Name}", category.Id, category.Name);
+            await _repository.AddAsync(category);
+            _logger?.LogInformation("CategoryService.CreateAsync: Calling SaveChangesAsync");
+            savedCount = await _unitOfWork.SaveChangesAsync();
+        });
         _logger?.LogInformation("CategoryService.CreateAsync: SaveChangesAsync returned {Count} changes, Category.Id={Id}", savedCount, category.Id);
 
         // Verify the category was actually saved by fetching it back
-        if (category.Id == 0)
-        {
-            _logger?.LogError("CategoryService.CreateAsync: CRITICAL - Category.Id is 0 after SaveChangesAsync. Entity was not persisted!");
-            throw new InvalidOperationException("Failed to save category - entity ID not generated");
-        }
-        
         var verifyCategory = await _repository.GetByIdAsync(category.Id);
         if (verifyCategory == null)
         {
@@ -207,20 +208,18 @@ public class CategoryService : ICategoryService
             CreatedAt = DateTime.UtcNow
         };
 
-        _logger?.LogInformation("CategoryService.CreateSubcategoryAsync: Adding to repository - Name={Name}", subcategory.Name);
-        await _repository.AddSubcategoryAsync(subcategory);
-        
-        _logger?.LogInformation("CategoryService.CreateSubcategoryAsync: Calling first SaveChangesAsync");
-        var savedCount = await _unitOfWork.SaveChangesAsync();
+        int savedCount = 0;
+        await _unitOfWork.ExecuteInTransactionAsync(async () =>
+        {
+            var nextId = await _repository.GetNextSubcategoryIdAsync();
+            subcategory.Id = nextId;
+            _logger?.LogInformation("CategoryService.CreateSubcategoryAsync: Adding to repository - Id={Id}, Name={Name}", subcategory.Id, subcategory.Name);
+            await _repository.AddSubcategoryAsync(subcategory);
+            _logger?.LogInformation("CategoryService.CreateSubcategoryAsync: Calling SaveChangesAsync");
+            savedCount = await _unitOfWork.SaveChangesAsync();
+        });
         _logger?.LogInformation("CategoryService.CreateSubcategoryAsync: SaveChangesAsync returned {Count} changes, Subcategory.Id={Id}", savedCount, subcategory.Id);
 
-        // Verify the subcategory was actually saved
-        if (subcategory.Id == 0)
-        {
-            _logger?.LogError("CategoryService.CreateSubcategoryAsync: CRITICAL - Subcategory.Id is 0 after SaveChangesAsync. Entity was not persisted!");
-            throw new InvalidOperationException("Failed to save subcategory - entity ID not generated");
-        }
-        
         var verifySubcategory = await _repository.GetSubcategoryByIdAsync(subcategory.Id);
         if (verifySubcategory == null)
         {
@@ -231,33 +230,38 @@ public class CategoryService : ICategoryService
         _logger?.LogInformation("CategoryService.CreateSubcategoryAsync: VERIFIED - Subcategory saved successfully. Id={Id}, Name={Name}, CategoryId={CategoryId}", 
             verifySubcategory.Id, verifySubcategory.Name, verifySubcategory.CategoryId);
 
-        // Apply category-level field templates to new subcategory
-        var categoryFields = await _unitOfWork.CategoryFieldDefinitions.GetByCategoryIdAsync(categoryId, includeInactive: true);
-        foreach (var template in categoryFields.Where(f => f.IsActive))
+        // Apply category-level field templates to new subcategory (set Id for each; SQL Server has no IDENTITY).
+        await _unitOfWork.ExecuteInTransactionAsync(async () =>
         {
-            if (await _unitOfWork.FieldDefinitions.ExistsAsync(subcategory.Id, template.Key))
+            var categoryFields = await _unitOfWork.CategoryFieldDefinitions.GetByCategoryIdAsync(categoryId, includeInactive: true);
+            var nextId = await _unitOfWork.FieldDefinitions.GetNextSubcategoryFieldDefinitionIdAsync();
+            foreach (var template in categoryFields.Where(f => f.IsActive))
             {
-                continue;
-            }
+                if (await _unitOfWork.FieldDefinitions.ExistsAsync(subcategory.Id, template.Key))
+                {
+                    continue;
+                }
 
-            await _unitOfWork.FieldDefinitions.AddAsync(new SubcategoryFieldDefinition
-            {
-                SubcategoryId = subcategory.Id,
-                Name = template.Name,
-                Label = template.Label,
-                FieldKey = template.Key,
-                Type = template.Type,
-                IsRequired = template.IsRequired,
-                DefaultValue = template.DefaultValue,
-                OptionsJson = template.OptionsJson,
-                Min = template.Min,
-                Max = template.Max,
-                SortOrder = template.SortOrder,
-                IsActive = template.IsActive,
-                CreatedAt = DateTime.UtcNow
-            });
-        }
-        await _unitOfWork.SaveChangesAsync();
+                await _unitOfWork.FieldDefinitions.AddAsync(new SubcategoryFieldDefinition
+                {
+                    Id = nextId++,
+                    SubcategoryId = subcategory.Id,
+                    Name = template.Name,
+                    Label = template.Label,
+                    FieldKey = template.Key,
+                    Type = template.Type,
+                    IsRequired = template.IsRequired,
+                    DefaultValue = template.DefaultValue,
+                    OptionsJson = template.OptionsJson,
+                    Min = template.Min,
+                    Max = template.Max,
+                    SortOrder = template.SortOrder,
+                    IsActive = template.IsActive,
+                    CreatedAt = DateTime.UtcNow
+                });
+            }
+            await _unitOfWork.SaveChangesAsync();
+        });
 
         // Get all subcategories for this category to determine index
         var allSubcategories = await _repository.GetSubcategoriesByCategoryIdAsync(categoryId);
@@ -330,7 +334,8 @@ public class CategoryService : ICategoryService
 
     private static string NormalizeName(string name)
     {
-        return name.Trim().ToUpperInvariant();
+        // Use ToLowerInvariant to match SQL Server migration backfill (LOWER(Name)); keeps unique index consistent.
+        return name.Trim().ToLowerInvariant();
     }
 
     private static SubcategoryResponse MapSubcategoryToResponse(Subcategory subcategory, int categoryId, int indexWithinCategory = 0) => new()

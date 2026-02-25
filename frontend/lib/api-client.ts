@@ -1,6 +1,5 @@
 // lib/api-client.ts
-// Robust API client with automatic port detection (5000/5001 fallback)
-// Uses direct calls to backend (Option A) - set NEXT_PUBLIC_API_BASE_URL to customize
+// Robust API client; set NEXT_PUBLIC_API_BASE_URL to customize (dev default: http://localhost:8080).
 
 import { normalizeBaseUrl, joinApi, getEffectiveApiBaseUrl, getDefaultApiBaseUrl } from "./url";
 
@@ -9,8 +8,8 @@ const API_BASE_URL_CACHE_KEY = "ticketing.api.baseUrl";
 const API_BASE_URL_DETECTION_KEY = "ticketing.api.detectionInProgress";
 
 // Use direct calls by default (Option A)
-// Set NEXT_PUBLIC_API_BASE_URL to use a specific backend URL
-// If not set, defaults to http://localhost:5000
+// Set NEXT_PUBLIC_API_BASE_URL to use a specific backend URL (e.g. http://localhost:8080 for IIS).
+// If not set in dev, defaults to http://localhost:5000 (matches tools/run-backend.ps1).
 const USE_PROXY = false; // Always use direct calls (Option A)
 
 // Get cached API base URL or null
@@ -226,6 +225,24 @@ interface ApiRequestOptions {
   silent?: boolean; // If true, suppress console.error on non-2xx responses (still throws error)
 }
 
+/** Options for GET requests that must never be cached (ticket lists, details, messages). */
+export interface ApiGetNoStoreOptions {
+  token?: string | null;
+  silent?: boolean;
+}
+
+/**
+ * GET request that never caches: uses cache: "no-store" and credentials: "include".
+ * Use for all ticket-related GETs (lists, details, messages) so UI reflects latest data.
+ * (If you add server-side fetch for tickets, use next: { revalidate: 0 } there.)
+ */
+export async function apiGetNoStore<TResponse>(
+  path: string,
+  options: ApiGetNoStoreOptions = {}
+): Promise<TResponse> {
+  return apiRequest<TResponse>(path, { ...options, method: "GET" });
+}
+
 function isAbsoluteUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
 }
@@ -330,7 +347,7 @@ export async function apiRequest<TResponse>(
 
   // Get the resolved API base URL (with automatic detection)
   let baseUrl = await getApiBaseUrl();
-  // In dev, never use empty base so we always hit backend (e.g. http://localhost:5000), not same-origin
+  // In dev, never use empty base so we always hit backend (e.g. http://localhost:8080), not same-origin
   if (process.env.NODE_ENV === "development" && !normalizeBaseUrl(baseUrl)) {
     baseUrl = getDefaultApiBaseUrl();
   }
@@ -445,8 +462,8 @@ export async function apiRequest<TResponse>(
       headers,
       body: isFormData ? body : (body ? JSON.stringify(body) : undefined),
       signal: controller.signal,
-      cache: "no-store", // Always fetch fresh data (important for dynamic fields)
-      credentials: "include", // Include cookies for CORS requests (backend allows credentials)
+      cache: "no-store", // No caching for ticket/list/messages; use apiGetNoStore for GETs
+      credentials: "include", // Cookie-based auth (CORS)
     });
     clearTimeout(timeoutId);
   } catch (error: any) {
@@ -461,12 +478,12 @@ export async function apiRequest<TResponse>(
        error.message?.includes("Failed to fetch") ||
        error.message?.includes("NetworkError") ||
        error.name === "TypeError") &&
-      baseUrl === "http://localhost:5000" &&
+      baseUrl === "http://localhost:8080" &&
       !isDetectionInProgress()
     ) {
-      console.warn(`[api-client] Request to ${baseUrl} failed, trying fallback port 5001...`);
+      console.warn(`[api-client] Request to ${baseUrl} failed, clearing cache and retrying...`);
       
-      // Clear cache and retry with port 5001
+      // Clear cache and retry with fresh resolution
       API_BASE_URL = null;
       clearApiBaseUrlCache();
       
@@ -528,16 +545,9 @@ export async function apiRequest<TResponse>(
     throw error;
   }
 
-  // Log response status immediately
-  console.log(`[apiRequest] ${method} ${url} → ${res.status} ${res.statusText}`);
-  
-  // Store last error for debug widget (dev only)
-  if (!res.ok && typeof window !== "undefined" && process.env.NODE_ENV === "development") {
-    (window as any).__lastApiError = {
-      url,
-      status: res.status,
-      statusText: res.statusText,
-    };
+  // Log response status (dev; always when NEXT_PUBLIC_DEBUG_API=1)
+  if (process.env.NODE_ENV === "development" || (typeof process !== "undefined" && (process.env.NEXT_PUBLIC_DEBUG_API === "true" || process.env.NEXT_PUBLIC_DEBUG_API === "1"))) {
+    console.log(`[apiRequest] ${method} ${url} → ${res.status} ${res.statusText}`);
   }
 
   if (!res.ok) {
@@ -570,7 +580,14 @@ export async function apiRequest<TResponse>(
         (errorBody as Record<string, unknown>).rawText = responseText;
       }
 
-      // Extract error message from JSON body (RFC 7807 ProblemDetails preferred for 403/4xx/5xx)
+      // Debug mode: surface failure quickly (console + window for toast/debug UI)
+      const debugApi = typeof process !== "undefined" && (process.env.NEXT_PUBLIC_DEBUG_API === "true" || process.env.NEXT_PUBLIC_DEBUG_API === "1");
+      if (debugApi && typeof window !== "undefined") {
+        console.error(`[api-client] Mutation failed: ${method} ${url} → ${res.status} ${res.statusText}`, { body: errorBody, snippet: responseText?.slice(0, 300) });
+        (window as any).__lastApiError = { url, status: res.status, statusText: res.statusText, method, body: errorBody };
+      }
+
+      // Extract error message from JSON body
       if (errorBody && typeof errorBody === "object") {
         const body = errorBody as Record<string, unknown>;
         if (body.errors && typeof body.errors === "object") {

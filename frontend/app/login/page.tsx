@@ -45,7 +45,7 @@ export default function LoginPage() {
       
       // Check for network errors
       if (err?.message?.includes("fetch") || err?.message?.includes("Failed to fetch") || err?.message?.includes("Cannot connect")) {
-        errorMessage = "Cannot connect to the server. Please ensure the backend is running on http://localhost:5000"
+        errorMessage = "Cannot connect to the server. Please ensure the backend is running on http://localhost:8080"
       }
       // 401 or auth-related messages: show friendly text (backend may return "No token", "Authentication required.", etc.)
       else if (err?.status === 401 || /no token|authentication required|unauthorized/i.test(errorMessage)) {

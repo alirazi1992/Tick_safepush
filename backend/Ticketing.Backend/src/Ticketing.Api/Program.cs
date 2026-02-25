@@ -1,5 +1,7 @@
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Ticketing.Domain.Enums;
 using Ticketing.Infrastructure.Data;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -29,9 +31,24 @@ else
 
 builder.Services.AddControllers();
 
+builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddCookie();
+builder.Services.AddAuthorization(options =>
+    options.AddPolicy("AdminOnly", p => p.RequireRole(nameof(UserRole.Admin))));
+
 var app = builder.Build();
 
+app.UseAuthentication();
+app.UseAuthorization();
+
 app.MapControllers();
+
+const string BuildStamp = "tikq-build-2026-02-25-diag-v1";
+app.MapGet("/diag/build", () => Results.Json(new { build = BuildStamp }))
+    .RequireAuthorization("AdminOnly");
+app.MapGet("/api/diag/build", () => Results.Json(new { build = BuildStamp }))
+    .RequireAuthorization("AdminOnly");
+app.Logger.LogInformation("BuildStamp: {BuildStamp}", BuildStamp);
 
 // Stable health schema for handoff and verify-prod.ps1 (unauthenticated). See docs/01_Runbook/HEALTH_SCHEMA.md
 app.MapGet("/api/health", async (AppDbContext dbContext, IConfiguration configuration, IWebHostEnvironment env) =>
@@ -157,7 +174,7 @@ app.MapGet("/api/health", async (AppDbContext dbContext, IConfiguration configur
     });
 });
 
-app.Logger.LogInformation("[STARTUP] Routes mapped: Controllers=ON, Health=/api/health");
+app.Logger.LogInformation("[STARTUP] Routes mapped: Controllers=ON, Health=/api/health, Diag=/diag/build, /api/diag/build");
 
 app.Run();
 

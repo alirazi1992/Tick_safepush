@@ -1,4 +1,4 @@
-import { apiRequest } from "./api-client"
+import { apiRequest, apiGetNoStore } from "./api-client"
 import type { ApiTicketResponse, ApiTicketActivityDto } from "./api-types"
 
 export interface AssignTechniciansRequest {
@@ -49,13 +49,9 @@ export async function getTicketActivities(
   ticketId: string
 ): Promise<ApiTicketActivityDto[]> {
   try {
-    return await apiRequest<ApiTicketActivityDto[]>(
+    return await apiGetNoStore<ApiTicketActivityDto[]>(
       `/api/tickets/${ticketId}/activities`,
-      {
-        method: "GET",
-        token,
-        silent: true, // Silent mode for 404s (treat as "no activities")
-      }
+      { token, silent: true }
     )
   } catch (error: any) {
     // If 404, treat as "no activities yet" (silent mode)

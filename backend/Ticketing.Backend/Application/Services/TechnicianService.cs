@@ -319,7 +319,9 @@ public class TechnicianService : ITechnicianService
             Role = UserRole.Technician,
             PhoneNumber = request.Phone,
             Department = request.Department,
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = DateTime.UtcNow,
+            LockoutEnabled = false,
+            LockoutEnd = null
         };
         newUser.PasswordHash = _passwordHasher.HashPassword(newUser, request.Password);
         await _userRepository.AddAsync(newUser);

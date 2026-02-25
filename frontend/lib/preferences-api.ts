@@ -7,6 +7,15 @@ let serverPrefsSupported: boolean | null = null // null = unknown, true = suppor
 
 const PREFERENCES_STORAGE_KEY = "ticketing-user-preferences"
 
+/** System is Farsi-only: normalize any preferences to language "fa" and direction "rtl". */
+function normalizeToFarsi(prefs: ApiUserPreferencesResponse): ApiUserPreferencesResponse {
+  return {
+    ...prefs,
+    language: "fa",
+    direction: "rtl",
+  }
+}
+
 function getDefaultPreferences(): ApiUserPreferencesResponse {
   return {
     theme: "dark",
@@ -61,15 +70,15 @@ export async function getMyPreferences(token: string | null): Promise<ApiUserPre
   // Always load from localStorage first for instant response
   const storedPrefs = loadPreferencesFromStorage()
   if (storedPrefs) {
-    // If we know server doesn't support it, just return localStorage
+    // If we know server doesn't support it, just return localStorage (normalized to Farsi)
     if (serverPrefsSupported === false) {
-      return storedPrefs
+      return normalizeToFarsi(storedPrefs)
     }
   }
 
   // If we know server doesn't support preferences, skip server call
   if (serverPrefsSupported === false) {
-    return storedPrefs || getDefaultPreferences()
+    return normalizeToFarsi(storedPrefs || getDefaultPreferences())
   }
 
   // Try server only if support is unknown
@@ -82,10 +91,11 @@ export async function getMyPreferences(token: string | null): Promise<ApiUserPre
         silent: false, // Log errors to help debug if endpoint doesn't exist
       })
       
-      // Server supports preferences - use server data and update localStorage
+      // Server supports preferences - use server data (normalized to Farsi) and update localStorage
       serverPrefsSupported = true
-      savePreferencesToStorage(serverPrefs)
-      return serverPrefs
+      const normalized = normalizeToFarsi(serverPrefs)
+      savePreferencesToStorage(normalized)
+      return normalized
     } catch (error: any) {
       if (error?.status === 404) {
         // Server doesn't support preferences - mark and never call again
@@ -94,7 +104,7 @@ export async function getMyPreferences(token: string | null): Promise<ApiUserPre
         return storedPrefs || getDefaultPreferences()
       }
       // For other errors (network, 500, etc.), return stored or defaults
-      return storedPrefs || getDefaultPreferences()
+      return normalizeToFarsi(storedPrefs || getDefaultPreferences())
     }
   }
 
@@ -106,8 +116,9 @@ export async function getMyPreferences(token: string | null): Promise<ApiUserPre
         token,
         silent: false,
       })
-      savePreferencesToStorage(serverPrefs)
-      return serverPrefs
+      const normalized = normalizeToFarsi(serverPrefs)
+      savePreferencesToStorage(normalized)
+      return normalized
     } catch (error: any) {
       // If server call fails after we know it's supported, fall back to localStorage
       return storedPrefs || getDefaultPreferences()
@@ -131,7 +142,7 @@ export async function updateMyPreferences(
   token: string | null,
   preferences: ApiUserPreferencesUpdateRequest
 ): Promise<ApiUserPreferencesResponse> {
-  const prefsResponse = preferences as ApiUserPreferencesResponse
+  const prefsResponse = normalizeToFarsi(preferences as ApiUserPreferencesResponse)
   
   // Always save to localStorage immediately (works offline, instant)
   savePreferencesToStorage(prefsResponse)
@@ -154,8 +165,8 @@ export async function updateMyPreferences(
       
       // Server supports preferences - use server response
       serverPrefsSupported = true
-      savePreferencesToStorage(serverPrefs)
-      return serverPrefs
+      savePreferencesToStorage(normalizeToFarsi(serverPrefs))
+      return prefsResponse
     } catch (error: any) {
       if (error?.status === 404) {
         // Server doesn't support preferences - mark and never call again
@@ -174,11 +185,12 @@ export async function updateMyPreferences(
       const serverPrefs = await apiRequest<ApiUserPreferencesResponse>("/api/Users/me/preferences", {
         method: "PUT",
         token,
-        body: preferences,
+        body: prefsResponse,
         silent: false,
       })
-      savePreferencesToStorage(serverPrefs)
-      return serverPrefs
+      const normalized = normalizeToFarsi(serverPrefs)
+      savePreferencesToStorage(normalized)
+      return prefsResponse
     } catch (error: any) {
       // If server call fails after we know it's supported, keep localStorage version
       return prefsResponse

@@ -210,7 +210,10 @@ if (isSqlServer)
             "Set ConnectionStrings__DefaultConnection (e.g. via environment variable) or set Provider=Sqlite to use SQLite.");
     builder.Services.AddDbContext<AppDbContext>(options =>
         options.UseSqlServer(connectionString, sql =>
-            sql.EnableRetryOnFailure()));
+        {
+            sql.EnableRetryOnFailure();
+            sql.UseQuerySplittingBehavior(Microsoft.EntityFrameworkCore.QuerySplittingBehavior.SplitQuery);
+        }));
     try
     {
         var csb = new SqlConnectionStringBuilder(connectionString);
@@ -850,10 +853,10 @@ static async Task EnsureCategoriesNormalizedNameColumnExistsAsync(
             "ALTER TABLE \"Categories\" ADD COLUMN \"NormalizedName\" TEXT NULL;");
         logger.LogInformation("[SCHEMA_GUARD] Categories.NormalizedName created.");
 
-        // Backfill: same normalization as CategoryService (trim + upper)
+        // Backfill: same normalization as CategoryService (trim + lower; matches SQL Server migration)
         var backfillCmd = connection.CreateCommand();
         backfillCmd.CommandText = @"
-            UPDATE ""Categories"" SET ""NormalizedName"" = upper(trim(""Name""))
+            UPDATE ""Categories"" SET ""NormalizedName"" = lower(trim(""Name""))
             WHERE ""NormalizedName"" IS NULL OR ""NormalizedName"" = '';
         ";
         var rowsAffected = await backfillCmd.ExecuteNonQueryAsync();
@@ -2325,14 +2328,15 @@ using (var scope = app.Services.CreateScope())
         {
             var category = new Category
             {
+                Id = 1,
                 Name = "مالی",
-                NormalizedName = "مالی".Trim().ToUpperInvariant(),
+                NormalizedName = "مالی".Trim().ToLowerInvariant(),
                 Description = null,
                 IsActive = true,
                 CreatedAt = DateTime.UtcNow,
                 Subcategories = new List<Subcategory>
                 {
-                    new Subcategory { Name = "حقوق و دستمزد", IsActive = true, CreatedAt = DateTime.UtcNow }
+                    new Subcategory { Id = 1, Name = "حقوق و دستمزد", IsActive = true, CreatedAt = DateTime.UtcNow }
                 }
             };
             context.Categories.Add(category);
@@ -2347,8 +2351,10 @@ using (var scope = app.Services.CreateScope())
                 .FirstOrDefaultAsync();
             if (firstCategory != null && firstCategory.Subcategories.Count == 0)
             {
+                var nextSubId = (await context.Subcategories.MaxAsync(s => (int?)s.Id) ?? 0) + 1;
                 firstCategory.Subcategories.Add(new Subcategory
                 {
+                    Id = nextSubId,
                     Name = "حقوق و دستمزد",
                     IsActive = true,
                     CreatedAt = DateTime.UtcNow
@@ -2511,7 +2517,12 @@ app.UseMiddleware<Ticketing.Backend.Infrastructure.Auth.WindowsAuthModeMiddlewar
 
 app.MapGet("/api/ping", () => Results.Ok(new { message = "pong" }));
 
-// Health endpoint for connectivity checks (primary). Safe: provider from DbContext, redacted connection only (no secrets).
+// Deploy verification: anonymous so we get 200 to confirm runtime (no 404). Paths as-is, no route groups.
+const string DiagBuildStamp = "tikq-runtime-diag-v1";
+app.MapGet("/diag/build", () => Results.Json(new { build = DiagBuildStamp }));
+app.MapGet("/api/diag/build", () => Results.Json(new { build = DiagBuildStamp }));
+
+// Health endpoint for connectivity checks
 // CRITICAL: This endpoint is used by frontend and verify-prod.ps1; schema must match docs (provider, database.*, migration indicators).
 app.MapGet("/api/health", async (AppDbContext dbContext, IConfiguration configuration, Ticketing.Backend.Infrastructure.Data.DatabaseOptions databaseOptions) =>
 {
@@ -2998,6 +3009,7 @@ app.MapHub<Ticketing.Backend.Infrastructure.Hubs.TicketHub>("/hubs/tickets").Req
 app.Logger.LogInformation("[SignalR] Hub mapped at {HubRoute}", "/hubs/tickets");
 
 app.Logger.LogInformation("[STARTUP] Routes mapped: Controllers=ON, Health=/api/health");
+app.Logger.LogInformation("DIAG BUILD ACTIVE: tikq-runtime-diag-v1");
 
 // =======================
 // Port 5000 Preflight Check (Development only)
@@ -3119,6 +3131,7 @@ catch
 
 startupLogger.LogInformation("=");
 startupLogger.LogInformation("Backend Server Starting");
+startupLogger.LogInformation("TikQ build stamp: {BuildStamp}", DiagBuildStamp);
 startupLogger.LogInformation("=");
 startupLogger.LogInformation("Environment: {Environment}", app.Environment.EnvironmentName);
 var supervisorModeRaw = app.Configuration["SupervisorTechnicians:Mode"]?.Trim();

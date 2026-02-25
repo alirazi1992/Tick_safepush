@@ -26,6 +26,18 @@ public class FieldDefinitionRepository : IFieldDefinitionRepository
 
     public async Task<IEnumerable<SubcategoryFieldDefinition>> GetBySubcategoryIdAsync(int subcategoryId, bool includeInactive = true)
     {
+        var provider = _context.Database.ProviderName ?? "";
+        if (!provider.Contains("Sqlite", StringComparison.OrdinalIgnoreCase))
+        {
+            // SQL Server and others: use LINQ so we never run SQLite-style raw SQL.
+            var query = _context.SubcategoryFieldDefinitions
+                .AsNoTracking()
+                .Where(f => f.SubcategoryId == subcategoryId);
+            if (!includeInactive)
+                query = query.Where(f => f.IsActive);
+            return await query.OrderBy(f => f.SortOrder).ThenBy(f => f.Id).ToListAsync();
+        }
+
         var sql = @"
             SELECT Id, SubcategoryId, Name, Label, FieldKey, Type, IsRequired,
                    DefaultValue, OptionsJson, Min, Max, SortOrder, IsActive, CreatedAt, UpdatedAt
@@ -44,18 +56,7 @@ public class FieldDefinitionRepository : IFieldDefinitionRepository
         catch (Exception ex) when (IsMissingColumnException(ex))
         {
             // Backward compatibility: DB still has [Key] column (migration not applied). Use legacy column, alias as FieldKey.
-            var provider = _context.Database.ProviderName ?? "";
-            string legacySql;
-            if (provider.Contains("SqlServer", StringComparison.OrdinalIgnoreCase))
-                legacySql = @"
-            SELECT Id, SubcategoryId, Name, Label, [Key] AS FieldKey, Type, IsRequired,
-                   DefaultValue, OptionsJson, Min, Max, SortOrder, IsActive, CreatedAt, UpdatedAt
-            FROM SubcategoryFieldDefinitions
-            WHERE SubcategoryId = {0}
-            " + (includeInactive ? "" : " AND IsActive = 1 ") + @"
-            ORDER BY SortOrder, Id";
-            else
-                legacySql = @"
+            string legacySql = @"
             SELECT Id, SubcategoryId, Name, Label, ""Key"" AS FieldKey, Type, IsRequired,
                    DefaultValue, OptionsJson, Min, Max, SortOrder, IsActive, CreatedAt, UpdatedAt
             FROM SubcategoryFieldDefinitions
@@ -98,6 +99,12 @@ public class FieldDefinitionRepository : IFieldDefinitionRepository
             .ToListAsync();
     }
 
+    public async Task<int> GetNextSubcategoryFieldDefinitionIdAsync()
+    {
+        var max = await _context.SubcategoryFieldDefinitions.MaxAsync(f => (int?)f.Id);
+        return (max ?? 0) + 1;
+    }
+
     public async Task<SubcategoryFieldDefinition> AddAsync(SubcategoryFieldDefinition fieldDefinition)
     {
         // Ensure IsRequired is explicitly set (defensive programming)
@@ -105,9 +112,17 @@ public class FieldDefinitionRepository : IFieldDefinitionRepository
         {
             fieldDefinition.IsRequired = false;
         }
-        
-        // Use parameterized SQL to safely insert and ensure IsRequired is explicitly set
-        // This works around SQLite column definition issues where DEFAULT might not be applied
+
+        var provider = _context.Database.ProviderName ?? "";
+        // Use EF Core for any non-SQLite provider (raw path uses SQLite-only: PRAGMA, datetime('now'), last_insert_rowid).
+        if (!provider.Contains("Sqlite", StringComparison.OrdinalIgnoreCase))
+        {
+            await _context.SubcategoryFieldDefinitions.AddAsync(fieldDefinition);
+            return fieldDefinition;
+        }
+
+        // SQLite only: use parameterized SQL to safely insert and ensure IsRequired is explicitly set
+        // (works around SQLite column definition issues where DEFAULT might not be applied)
         var isRequiredInt = fieldDefinition.IsRequired ? 1 : 0;
         
         // Get all columns from the table to handle legacy columns (SortOrder, IsActive, etc.)

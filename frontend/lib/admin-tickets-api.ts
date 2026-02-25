@@ -1,4 +1,4 @@
-import { apiRequest } from "./api-client"
+import { apiRequest, apiGetNoStore } from "./api-client"
 import type {
   ApiAdminTicketDetailsDto,
   ApiAdminTicketListResponse,
@@ -58,9 +58,9 @@ export async function getAdminTicketsByDate(
   date: string
 ): Promise<ApiAdminTicketByDateItemDto[]> {
   const params = new URLSearchParams({ date })
-  return apiRequest<ApiAdminTicketByDateItemDto[]>(
+  return apiGetNoStore<ApiAdminTicketByDateItemDto[]>(
     `/api/admin/tickets/by-date?${params.toString()}`,
-    { method: "GET", token }
+    { token }
   )
 }
 
@@ -71,9 +71,9 @@ export async function getAdminTicketsByDayJalali(
 ): Promise<ApiAdminTicketByDateItemDto[]> {
   const normalized = dayJalali.trim().replace(/-/g, "/")
   const params = new URLSearchParams({ dayJalali: normalized })
-  return apiRequest<ApiAdminTicketByDateItemDto[]>(
+  return apiGetNoStore<ApiAdminTicketByDateItemDto[]>(
     `/api/admin/tickets/by-date?${params.toString()}`,
-    { method: "GET", token }
+    { token }
   )
 }
 
@@ -89,14 +89,13 @@ export async function getAdminTickets(
     pageSize: String(pageSize),
   })
   try {
-    return await apiRequest<ApiAdminTicketListResponse>(`/api/admin/tickets?${params.toString()}`, {
-      method: "GET",
+    return await apiGetNoStore<ApiAdminTicketListResponse>(`/api/admin/tickets?${params.toString()}`, {
       token,
       silent: true,
     })
   } catch (error: any) {
     if (error?.status) {
-      const tickets = await apiRequest<ApiTicketListItemResponse[]>("/api/tickets", { method: "GET", token })
+      const tickets = await apiGetNoStore<ApiTicketListItemResponse[]>("/api/tickets", { token })
       const filtered = filterByDays(tickets, days, false)
       const paged = filtered.slice((page - 1) * pageSize, page * pageSize)
       return {
@@ -122,17 +121,13 @@ export async function getAdminArchiveTickets(
     pageSize: String(pageSize),
   })
   try {
-    return await apiRequest<ApiAdminTicketListResponse>(
+    return await apiGetNoStore<ApiAdminTicketListResponse>(
       `/api/admin/tickets/archive?${params.toString()}`,
-      {
-        method: "GET",
-        token,
-        silent: true,
-      }
+      { token, silent: true }
     )
   } catch (error: any) {
     if (error?.status) {
-      const tickets = await apiRequest<ApiTicketListItemResponse[]>("/api/tickets", { method: "GET", token })
+      const tickets = await apiGetNoStore<ApiTicketListItemResponse[]>("/api/tickets", { token })
       const filtered = filterByDays(tickets, olderThanDays, true)
       const paged = filtered.slice((page - 1) * pageSize, page * pageSize)
       return {
@@ -151,19 +146,14 @@ export async function getAdminTicketDetails(
   ticketId: string
 ): Promise<ApiAdminTicketDetailsDto> {
   try {
-    return await apiRequest<ApiAdminTicketDetailsDto>(`/api/admin/tickets/${ticketId}/details`, {
-      method: "GET",
+    return await apiGetNoStore<ApiAdminTicketDetailsDto>(`/api/admin/tickets/${ticketId}/details`, {
       token,
       silent: true,
     })
   } catch (error: any) {
     if (error?.status) {
-      const ticket = await apiRequest<ApiTicketResponse>(`/api/tickets/${ticketId}`, {
-        method: "GET",
-        token,
-      })
-      const messages = await apiRequest<ApiAdminTicketMessageDto[]>(`/api/tickets/${ticketId}/messages`, {
-        method: "GET",
+      const ticket = await apiGetNoStore<ApiTicketResponse>(`/api/tickets/${ticketId}`, { token })
+      const messages = await apiGetNoStore<ApiAdminTicketMessageDto[]>(`/api/tickets/${ticketId}/messages`, {
         token,
       })
       const responders = Array.from(
@@ -310,22 +300,16 @@ export async function getAdminTechnicianDirectory(
 
   const suffix = query.toString()
   try {
-    return await apiRequest<ApiAdminTechnicianDirectoryItemDto[]>(
+    return await apiGetNoStore<ApiAdminTechnicianDirectoryItemDto[]>(
       `/api/admin/technicians/directory${suffix ? `?${suffix}` : ""}`,
-      { method: "GET", token, silent: true }
+      { token, silent: true }
     )
   } catch (error: any) {
     if (!error?.status) {
       throw error
     }
-    const technicians = await apiRequest<ApiTechnicianResponse[]>("/api/admin/technicians", {
-      method: "GET",
-      token,
-    })
-    const categories = await apiRequest<ApiCategoryResponse[]>("/api/categories", {
-      method: "GET",
-      token,
-    })
+    const technicians = await apiGetNoStore<ApiTechnicianResponse[]>("/api/admin/technicians", { token })
+    const categories = await apiGetNoStore<ApiCategoryResponse[]>("/api/categories", { token })
     const subcategoryMap = new Map<number, { categoryId: number; categoryName: string; subcategoryName: string }>()
     categories.forEach((category) => {
       category.subcategories.forEach((subcategory) => {

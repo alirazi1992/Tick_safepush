@@ -2,6 +2,14 @@ using System.ComponentModel.DataAnnotations;
 
 namespace Ticketing.Backend.Application.DTOs;
 
+/// <summary>Request DTO for POST /api/categories (create). Validated in controller before calling service.</summary>
+public class CreateCategoryRequest
+{
+    public string Name { get; init; } = string.Empty;
+    public string? Description { get; init; }
+    public bool IsActive { get; init; } = true;
+}
+
 public class CategoryRequest
 {
     [Required(ErrorMessage = "Name is required")]

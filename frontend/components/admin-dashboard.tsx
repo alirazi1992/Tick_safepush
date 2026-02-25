@@ -17,6 +17,7 @@ import { AdminReports } from "./admin-reports"
 interface AdminDashboardProps {
   tickets: Ticket[]
   onTicketUpdate: (ticketId: string, updates: Partial<Ticket>) => void
+  onRefreshTickets?: () => void | Promise<void>
   technicians: TechnicianProfile[]
   categoriesData: any
   onCategoryUpdate: (categories: any) => void
@@ -27,6 +28,7 @@ interface AdminDashboardProps {
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   tickets,
   onTicketUpdate,
+  onRefreshTickets,
   technicians,
   categoriesData,
   onCategoryUpdate,
@@ -75,6 +77,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           technicians={technicians}
           authToken={authToken}
           tickets={tickets}
+          onRefreshTickets={onRefreshTickets}
         />
       </TabsContent>
 
